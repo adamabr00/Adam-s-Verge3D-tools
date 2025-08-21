@@ -1,0 +1,1274 @@
+<template color="#4a90e2">
+    <dummy>
+        <label>Enable Math Expression Input (Shift+C)</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `(function() {
+
+        // ✅ Check if URL contains 'logic' parameter
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('logic')) {
+    console.log('%c[Math Expression to Puzzle skipped] No "logic" parameter in URL.', 'color: orange; font-weight: bold;');
+    return;
+  }
+
+  if (window.__mathExpressionUIInitialized) return;
+  window.__mathExpressionUIInitialized = true;
+
+  // Load math.js dynamically
+  function loadMathJS(callback) {
+    if (typeof math !== 'undefined') {
+      callback();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.min.js";
+    script.onload = callback;
+    document.head.appendChild(script);
+  }
+
+  // Expression history for cycling through previous expressions
+  let expressionHistory = [];
+  let currentHistoryIndex = -1;
+
+  // Load math.js immediately for real-time parsing
+  loadMathJS(() => {
+    console.log('Math.js loaded for real-time parsing');
+  });
+
+  // AST to Blockly blocks
+  function astToBlocks_mathjs(node, workspace) {
+    switch(node.type) {
+      case "ConstantNode":
+        console.log('ConstantNode:', node.value, 'type:', typeof node.value);
+        let num = workspace.newBlock('math_number');
+        num.setFieldValue(node.value, 'NUM');
+        num.initSvg(); num.render();
+        return num;
+
+      case "SymbolNode": {
+        const varName = node.name;
+        let varModel = workspace.getVariable(varName);
+
+        // Create the variable if it doesn't exist
+        if (!varModel) {
+          varModel = workspace.createVariable(varName);
+        }
+
+        const variableBlock = workspace.newBlock('variables_get');
+
+        // ✅ Set the variable using the variable model's ID
+        variableBlock.setFieldValue(varModel.getId(), 'VAR');
+
+        variableBlock.initSvg(); variableBlock.render();
+        return variableBlock;
+      }
+
+
+            case "OperatorNode":
+        // Debug logging to understand the structure
+        console.log('OperatorNode:', node.op, 'args:', node.args);
+        
+        // Handle unary operators (negative numbers and logical NOT)
+        if (node.args.length === 1) {
+          if (node.fn === 'unaryMinus') {
+            let arg = astToBlocks_mathjs(node.args[0], workspace);
+            if (!arg) {
+              console.error('Failed to create unary minus argument');
+              let errorBlock = workspace.newBlock('text');
+              errorBlock.setFieldValue('Error: Invalid unary minus', 'TEXT');
+              errorBlock.initSvg(); errorBlock.render();
+              return errorBlock;
+            }
+            
+            // Create a math_single block with NEG operation
+            let negBlock = workspace.newBlock('math_single');
+            negBlock.setFieldValue('NEG', 'OP');
+            negBlock.getInput('NUM').connection.connect(arg.outputConnection);
+            negBlock.initSvg(); negBlock.render();
+            return negBlock;
+          } else if (node.op === '!') {
+            let arg = astToBlocks_mathjs(node.args[0], workspace);
+            if (!arg) {
+              console.error('Failed to create logical NOT argument');
+              let errorBlock = workspace.newBlock('text');
+              errorBlock.setFieldValue('Error: Invalid logical NOT', 'TEXT');
+              errorBlock.initSvg(); errorBlock.render();
+              return errorBlock;
+            }
+            
+            // Create a logic_negate block
+            let notBlock = workspace.newBlock('logic_negate');
+            notBlock.getInput('BOOL').connection.connect(arg.outputConnection);
+            notBlock.initSvg(); notBlock.render();
+            return notBlock;
+          }
+        }
+        
+        // Handle binary operators (addition, subtraction, etc.)
+        if (!node.args || node.args.length < 2) {
+          console.error('OperatorNode missing arguments:', node);
+          let errorBlock = workspace.newBlock('text');
+          errorBlock.setFieldValue('Error: Invalid operator', 'TEXT');
+          errorBlock.initSvg(); errorBlock.render();
+          return errorBlock;
+        }
+        
+        // Check if this is a comparison operator
+        const comparisonOps = ['==', '!=', '>', '<', '>=', '<='];
+        if (comparisonOps.includes(node.op)) {
+          let compareBlock = workspace.newBlock('logic_compare');
+          const compareOpMap = {
+            '==': 'EQ',
+            '!=': 'NEQ', 
+            '>': 'GT',
+            '<': 'LT',
+            '>=': 'GTE',
+            '<=': 'LTE'
+          };
+          compareBlock.setFieldValue(compareOpMap[node.op], 'OP');
+          
+          let leftArg = astToBlocks_mathjs(node.args[0], workspace);
+          let rightArg = astToBlocks_mathjs(node.args[1], workspace);
+          
+          if (!leftArg || !rightArg) {
+            console.error('Failed to create comparison arguments:', { leftArg, rightArg });
+            let errorBlock = workspace.newBlock('text');
+            errorBlock.setFieldValue('Error: Invalid comparison', 'TEXT');
+            errorBlock.initSvg(); errorBlock.render();
+            return errorBlock;
+          }
+          
+          compareBlock.getInput('A').connection.connect(leftArg.outputConnection);
+          compareBlock.getInput('B').connection.connect(rightArg.outputConnection);
+          compareBlock.initSvg(); compareBlock.render();
+          return compareBlock;
+        }
+        
+        // Check if this is a logical operator
+        const logicalOps = ['&&', '||'];
+        if (logicalOps.includes(node.op)) {
+          let logicBlock = workspace.newBlock('logic_operation');
+          const logicOpMap = {
+            '&&': 'AND',
+            '||': 'OR'
+          };
+          logicBlock.setFieldValue(logicOpMap[node.op], 'OP');
+          
+          let leftArg = astToBlocks_mathjs(node.args[0], workspace);
+          let rightArg = astToBlocks_mathjs(node.args[1], workspace);
+          
+          if (!leftArg || !rightArg) {
+            console.error('Failed to create logical operation arguments:', { leftArg, rightArg });
+            let errorBlock = workspace.newBlock('text');
+            errorBlock.setFieldValue('Error: Invalid logical operation', 'TEXT');
+            errorBlock.initSvg(); errorBlock.render();
+            return errorBlock;
+          }
+          
+          logicBlock.getInput('A').connection.connect(leftArg.outputConnection);
+          logicBlock.getInput('B').connection.connect(rightArg.outputConnection);
+          logicBlock.initSvg(); logicBlock.render();
+          return logicBlock;
+        }
+        
+        // Handle regular arithmetic operators
+        let opBlock = workspace.newBlock('math_arithmetic');
+        opBlock.setFieldValue({
+          '+': 'ADD',
+          '-': 'MINUS',
+          '*': 'MULTIPLY',
+          '/': 'DIVIDE',
+          '^': 'POWER'
+        }[node.op], 'OP');
+        
+        let left = astToBlocks_mathjs(node.args[0], workspace);
+        let right = astToBlocks_mathjs(node.args[1], workspace);
+        
+        // Check if blocks were created successfully
+        if (!left || !right) {
+          console.error('Failed to create operator arguments:', { left, right });
+          let errorBlock = workspace.newBlock('text');
+          errorBlock.setFieldValue('Error: Invalid arguments', 'TEXT');
+          errorBlock.initSvg(); errorBlock.render();
+          return errorBlock;
+        }
+        
+        opBlock.getInput('A').connection.connect(left.outputConnection);
+        opBlock.getInput('B').connection.connect(right.outputConnection);
+        opBlock.initSvg(); opBlock.render();
+        return opBlock;
+
+      case "FunctionNode":
+        const fn = node.fn.name.toLowerCase();
+        if (["sin", "cos", "tan"].includes(fn)) {
+          let trig = workspace.newBlock('math_trig');
+          trig.setFieldValue(fn.toUpperCase(), 'OP');
+          let arg = astToBlocks_mathjs(node.args[0], workspace);
+          trig.getInput('NUM').connection.connect(arg.outputConnection);
+          trig.initSvg(); trig.render();
+          return trig;
+        }
+        if (["log", "ln", "sqrt", "abs"].includes(fn)) {
+          let single = workspace.newBlock('math_single');
+          // Map function names to Blockly's expected values
+          const opMap = {
+            'log': 'LOG10',
+            'ln': 'LN',
+            'sqrt': 'ROOT',
+            'abs': 'ABS'
+          };
+          single.setFieldValue(opMap[fn], 'OP');
+          let arg = astToBlocks_mathjs(node.args[0], workspace);
+          single.getInput('NUM').connection.connect(arg.outputConnection);
+          single.initSvg(); single.render();
+          return single;
+        }
+        let fallback = workspace.newBlock('text');
+        fallback.setFieldValue(fn + "(...)", 'TEXT');
+        fallback.initSvg(); fallback.render();
+        return fallback;
+
+             case "ConditionalNode":
+         // Handle logical comparisons (==, !=, >, <, >=, <=)
+         let compareBlock = workspace.newBlock('logic_compare');
+         const compareOpMap = {
+           '==': 'EQ',
+           '!=': 'NEQ', 
+           '>': 'GT',
+           '<': 'LT',
+           '>=': 'GTE',
+           '<=': 'LTE'
+         };
+         compareBlock.setFieldValue(compareOpMap[node.condition] || 'EQ', 'OP');
+         
+         let leftArg = astToBlocks_mathjs(node.trueExpr, workspace);
+         let rightArg = astToBlocks_mathjs(node.falseExpr, workspace);
+         
+         if (!leftArg || !rightArg) {
+           console.error('Failed to create comparison arguments:', { leftArg, rightArg });
+           let errorBlock = workspace.newBlock('text');
+           errorBlock.setFieldValue('Error: Invalid comparison', 'TEXT');
+           errorBlock.initSvg(); errorBlock.render();
+           return errorBlock;
+         }
+         
+         compareBlock.getInput('A').connection.connect(leftArg.outputConnection);
+         compareBlock.getInput('B').connection.connect(rightArg.outputConnection);
+         compareBlock.initSvg(); compareBlock.render();
+         return compareBlock;
+
+       case "ParenthesisNode":
+         // For parentheses, just return the content inside
+         return astToBlocks_mathjs(node.content, workspace);
+
+       default:
+         // Fallback for unknown node types
+         let unknownBlock = workspace.newBlock('text');
+         unknownBlock.setFieldValue('Unknown: ' + node.type, 'TEXT');
+         unknownBlock.initSvg(); unknownBlock.render();
+         return unknownBlock;
+    }
+  }
+
+  // Helper function to validate boolean expressions
+  function isValidBooleanExpr(expr) {
+    // Allow comparisons (contains =, <, >, !)
+    if (/[=<>!]/.test(expr)) return true;
+    // Allow single variables (assumed to be boolean)
+    if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expr.trim())) return true;
+    // Allow numbers (0 = false, non-zero = true)
+    if (/^[0-9]+(\.[0-9]+)?$/.test(expr.trim())) return true;
+    return false;
+  }
+
+  // Parse complex logical expressions with multiple operators
+  function parseComplexLogicalExpression(expr, workspace) {
+    console.log('Parsing complex logical expression:', expr);
+    
+    // Helper function to find the top-level logical operator (respecting parentheses)
+    function findTopLevelOperator(expression) {
+      console.log('Finding top-level operator in:', expression);
+      
+      // If the expression is wrapped in parentheses, remove them and look inside
+      if (expression.startsWith('(') && expression.endsWith(')')) {
+        const innerExpr = expression.substring(1, expression.length - 1);
+        console.log('Removing outer parentheses, looking in:', innerExpr);
+        return findTopLevelOperator(innerExpr);
+      }
+      
+      let parenCount = 0;
+      for (let i = 0; i < expression.length; i++) {
+        const char = expression[i];
+        if (char === '(') parenCount++;
+        else if (char === ')') parenCount--;
+        else if (parenCount === 0) {
+          // Check for && (must check before || to avoid partial matches)
+          if (expression.substring(i, i + 2) === '&&') {
+            console.log('Found && at index', i);
+            return { operator: '&&', index: i };
+          }
+          // Check for ||
+          if (expression.substring(i, i + 2) === '||') {
+            console.log('Found || at index', i);
+            return { operator: '||', index: i };
+          }
+        }
+      }
+      console.log('No top-level operator found');
+      return null;
+    }
+    
+    // Helper function to parse a single logical expression
+    function parseSingleLogicalExpression(expression) {
+      expression = expression.trim();
+      
+      // Handle NOT operator
+      if (expression.startsWith('!')) {
+        const innerExpr = expression.substring(1).trim();
+        if (!innerExpr) {
+          throw new Error('Invalid NOT expression format. Expected: !expression');
+        }
+        
+        // Validate that inner expression is a valid boolean expression
+        const isValidBooleanExpr = (expr) => {
+          // Allow comparisons (contains =, <, >, !)
+          if (/[=<>!]/.test(expr)) return true;
+          // Allow single variables (assumed to be boolean)
+          if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expr.trim())) return true;
+          // Allow numbers (0 = false, non-zero = true)
+          if (/^[0-9]+(\.[0-9]+)?$/.test(expr.trim())) return true;
+          return false;
+        };
+        
+        if (!isValidBooleanExpr(innerExpr)) {
+          throw new Error('NOT operator must be applied to a comparison (e.g., !(a == 5)) or boolean variable (e.g., !a). Got: ' + expression);
+        }
+        
+        const innerNode = math.parse(innerExpr);
+        const innerBlock = astToBlocks_mathjs(innerNode, workspace);
+        
+        const notBlock = workspace.newBlock('logic_negate');
+        notBlock.getInput('BOOL').connection.connect(innerBlock.outputConnection);
+        notBlock.initSvg(); notBlock.render();
+        return notBlock;
+      }
+      
+      // Check if it's a valid boolean expression
+      const isValidBooleanExpr = (expr) => {
+        // Allow comparisons (contains =, <, >, !)
+        if (/[=<>!]/.test(expr)) return true;
+        // Allow single variables (assumed to be boolean)
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(expr.trim())) return true;
+        // Allow numbers (0 = false, non-zero = true)
+        if (/^[0-9]+(\.[0-9]+)?$/.test(expr.trim())) return true;
+        return false;
+      };
+      
+      if (!isValidBooleanExpr(expression)) {
+        throw new Error('Expression must be a comparison (e.g., a == 5) or boolean variable (e.g., a). Got: ' + expression);
+      }
+      
+      // Parse as comparison
+      const node = math.parse(expression);
+      return astToBlocks_mathjs(node, workspace);
+    }
+    
+    // Find the top-level operator
+    const topOp = findTopLevelOperator(expr);
+    
+    if (topOp) {
+      // Split at the top-level operator
+      const leftExpr = expr.substring(0, topOp.index).trim();
+      const rightExpr = expr.substring(topOp.index + topOp.operator.length).trim();
+      
+      console.log('Split at', topOp.operator, ':', leftExpr, '|', rightExpr);
+      
+      // Clean up any remaining outer parentheses from the split parts
+      const cleanLeftExpr = leftExpr.startsWith('(') && leftExpr.endsWith(')') ? 
+        leftExpr.substring(1, leftExpr.length - 1) : leftExpr;
+      const cleanRightExpr = rightExpr.startsWith('(') && rightExpr.endsWith(')') ? 
+        rightExpr.substring(1, rightExpr.length - 1) : rightExpr;
+      
+      console.log('Cleaned expressions:', cleanLeftExpr, '|', cleanRightExpr);
+      
+      // Recursively parse both sides
+      console.log('Parsing left side:', cleanLeftExpr);
+      const leftBlock = parseComplexLogicalExpression(cleanLeftExpr, workspace);
+      console.log('Parsing right side:', cleanRightExpr);
+      const rightBlock = parseComplexLogicalExpression(cleanRightExpr, workspace);
+      
+      // Create the logical operation block
+      const logicBlock = workspace.newBlock('logic_operation');
+      logicBlock.setFieldValue(topOp.operator === '&&' ? 'AND' : 'OR', 'OP');
+      
+      // Connect the blocks
+      if (leftBlock.outputConnection) {
+        logicBlock.getInput('A').connection.connect(leftBlock.outputConnection);
+      }
+      if (rightBlock.outputConnection) {
+        logicBlock.getInput('B').connection.connect(rightBlock.outputConnection);
+      }
+      
+      logicBlock.initSvg(); logicBlock.render();
+      return logicBlock;
+    } else {
+      // No top-level operator found, parse as single expression
+      return parseSingleLogicalExpression(expr);
+    }
+  }
+
+  // Show input UI with real-time parsing
+  function showExpressionInput() {
+    // Remove existing overlay if any
+    const existingOverlay = document.getElementById('expressionOverlay');
+    if (existingOverlay) {
+      existingOverlay.remove();
+    }
+
+    // Add CSS styles for the modern UI
+    const style = document.createElement('style');
+    style.textContent = \`
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+      
+      #expressionOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+      }
+      
+      /* Removed dot pattern overlay for transparent background */
+      
+      #expressionContainer {
+        position: relative;
+        width: min(560px, 92vw);
+        padding: 28px 28px 24px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, #101827bf, #0b1324cc);
+        border: 1px solid #ffffff22;
+        box-shadow: 0 20px 40px rgba(2, 6, 23, .45);
+        backdrop-filter: blur(10px) saturate(120%);
+        color: #e5e7eb;
+      }
+      
+      #expressionTitle {
+        font-size: clamp(18px, 2.2vw, 22px);
+        line-height: 1.25;
+        margin: 0 0 6px;
+        font-weight: 700;
+        color: #e5e7eb;
+      }
+      
+      #expressionSubtitle {
+        margin: 0 0 18px;
+        color: #94a3b8;
+        font-size: 14px;
+      }
+      
+      #expressionField {
+        position: relative;
+        background: linear-gradient(180deg, #0c1322, #0a111e);
+        border: 1px solid #ffffff1a;
+        border-radius: 14px;
+        box-shadow: inset 0 0 0 1px #00000040;
+        margin-bottom: 10px;
+        min-height: 48px;
+      }
+      
+      /* Syntax highlighting layer */
+      .syntax {
+        margin: 0;
+        padding: 14px;
+        border-radius: 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 500 16px/1.6 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: #e6f0ff;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 1;
+        background: transparent;
+      }
+      
+      /* Transparent textarea on top */
+      #expressionInput {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        resize: none;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: transparent;
+        caret-color: #5b8cff;
+        padding: 14px;
+        font: 500 16px/1.6 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        z-index: 2;
+      }
+      
+      #expressionInput::selection {
+        background: #60a5fa55;
+      }
+      
+      /* Placeholder shown only when empty */
+      .placeholder {
+        position: absolute;
+        left: 14px;
+        top: 12px;
+        color: #93a4c7;
+        font: 500 16px/1.6 "JetBrains Mono", monospace;
+        pointer-events: none;
+        opacity: .8;
+        z-index: 1;
+      }
+      
+      /* Syntax highlighting classes */
+      .syntax-number { color: #93c5fd; }        /* Blue for numbers */
+      .syntax-operator { color: #60a5fa; }      /* Blue for operators */
+      .syntax-function { color: #a78bfa; }      /* Purple for functions */
+      .syntax-variable { color: #34d399; }      /* Green for existing variables */
+      .syntax-new-variable { color: #f472b6; }  /* Pink for new variables */
+      .syntax-comparison { color: #f97316; }    /* Orange for comparisons */
+      .syntax-logical { color: #ec4899; }       /* Magenta for logical operators */
+      .syntax-parenthesis { color: #94a3b8; }   /* Gray for parentheses */
+      .syntax-string { color: #fbbf24; }        /* Yellow for strings */
+      .syntax-error { color: #ef4444; }         /* Red for errors */
+      
+      #expressionStatus {
+        margin: 10px 0;
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 14px;
+        min-height: 20px;
+        font-family: "JetBrains Mono", monospace;
+        border: 1px solid;
+      }
+      
+      #expressionActions {
+        display: flex;
+        gap: 14px;
+        margin-top: 22px;
+      }
+      
+      .btn {
+        appearance: none;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-weight: 600;
+        font-size: 15px;
+        cursor: pointer;
+        transition: transform .06s ease, filter .2s ease, box-shadow .2s ease;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+      }
+      
+      .btn:active { 
+        transform: translateY(1px); 
+      }
+      
+      .btn-primary {
+        color: white;
+        background: linear-gradient(180deg, #6ea3ff, #4d7dff);
+        box-shadow: 0 12px 24px rgba(77, 125, 255, .35);
+      }
+      
+      .btn-primary:hover { 
+        filter: brightness(1.05);
+        box-shadow: 0 16px 28px rgba(77, 125, 255, .45);
+      }
+      
+      .btn-primary:disabled {
+        background: linear-gradient(180deg, #374151, #1f2937);
+        color: #9ca3af;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+      
+      .btn-ghost {
+        color: #e5e7eb;
+        background: linear-gradient(180deg, #0e1729, #0a1323);
+        border-color: #ffffff22;
+      }
+      
+      .btn-ghost:hover { 
+        filter: brightness(1.08); 
+      }
+    \`;
+    document.head.appendChild(style);
+
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'expressionOverlay';
+
+    // Create input container
+    const container = document.createElement('div');
+    container.id = 'expressionContainer';
+
+    // Create title
+    const title = document.createElement('h1');
+    title.id = 'expressionTitle';
+    title.textContent = 'Enter Mathematical or Logical Expression';
+    container.appendChild(title);
+
+    // Create subtitle
+    const subtitle = document.createElement('p');
+    subtitle.id = 'expressionSubtitle';
+    subtitle.textContent = 'Supports arithmetic and comparison operators. Up/Down Arrow keys for previous expressions';
+    container.appendChild(subtitle);
+
+    // Create input field container
+    const fieldContainer = document.createElement('div');
+    fieldContainer.id = 'expressionField';
+
+    // Create two-layer structure for syntax highlighting
+    const input = document.createElement('textarea');
+    input.id = 'expressionInput';
+    input.setAttribute('spellcheck', 'false');
+    input.setAttribute('aria-label', 'Expression input');
+    
+    // Create syntax highlighting layer
+    const syntaxLayer = document.createElement('pre');
+    syntaxLayer.className = 'syntax';
+    syntaxLayer.setAttribute('aria-hidden', 'true');
+    syntaxLayer.innerHTML = '<code id="syntaxHighlight"></code>';
+    
+    // Create placeholder
+    const placeholder = document.createElement('div');
+    placeholder.id = 'expressionPlaceholder';
+    placeholder.className = 'placeholder';
+    placeholder.textContent = 'e.g., 5 + x == banana';
+    
+    fieldContainer.appendChild(syntaxLayer);
+    fieldContainer.appendChild(input);
+    fieldContainer.appendChild(placeholder);
+    container.appendChild(fieldContainer);
+
+    // Create status display
+    const statusDiv = document.createElement('div');
+    statusDiv.id = 'expressionStatus';
+    container.appendChild(statusDiv);
+
+    // Create buttons container
+    const buttonContainer = document.createElement('div');
+    buttonContainer.id = 'expressionActions';
+
+    // Create convert button
+    const convertBtn = document.createElement('button');
+    convertBtn.textContent = 'Convert to Blocks';
+    convertBtn.className = 'btn btn-primary';
+    convertBtn.disabled = true;
+    buttonContainer.appendChild(convertBtn);
+
+    // Create cancel button
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'btn btn-ghost';
+    buttonContainer.appendChild(cancelBtn);
+
+    container.appendChild(buttonContainer);
+    overlay.appendChild(container);
+    document.body.appendChild(overlay);
+
+    // Focus input
+    input.focus();
+
+    // Function to add expression to history
+    function addToHistory(expr) {
+      if (!expr.trim()) return;
+      
+      // Remove if it already exists (to avoid duplicates)
+      const existingIndex = expressionHistory.indexOf(expr);
+      if (existingIndex !== -1) {
+        expressionHistory.splice(existingIndex, 1);
+      }
+      
+      // Add to beginning of history
+      expressionHistory.unshift(expr);
+      
+      // Limit history to 50 expressions
+      if (expressionHistory.length > 50) {
+        expressionHistory = expressionHistory.slice(0, 50);
+      }
+      
+      // Reset history index
+      currentHistoryIndex = -1;
+    }
+
+    // Function to navigate history
+    function navigateHistory(direction) {
+      if (expressionHistory.length === 0) return;
+      
+      if (direction === 'up') {
+        if (currentHistoryIndex < expressionHistory.length - 1) {
+          currentHistoryIndex++;
+        }
+      } else if (direction === 'down') {
+        if (currentHistoryIndex > -1) {
+          currentHistoryIndex--;
+        }
+      }
+      
+      if (currentHistoryIndex >= 0) {
+        input.value = expressionHistory[currentHistoryIndex];
+        // Trigger analysis
+        input.dispatchEvent(new Event('input'));
+        // Move cursor to end
+        input.setSelectionRange(input.value.length, input.value.length);
+      } else {
+        input.value = '';
+        input.dispatchEvent(new Event('input'));
+      }
+    }
+
+    // Function to extract variables from an expression
+    function extractVariables(expr) {
+      const variables = new Set();
+      
+      // Extract variable names using regex
+      // Matches: letters, numbers, underscores, but must start with letter or underscore
+      const varRegex = /\\b[a-zA-Z_][a-zA-Z0-9_]*\\b/g;
+      const matches = expr.match(varRegex);
+      
+      if (matches) {
+        // Filter out function names and constants
+        const functionNames = ['sin', 'cos', 'tan', 'log', 'ln', 'sqrt', 'abs', 'exp'];
+        const constants = ['pi', 'e', 'i', 'infinity', 'true', 'false'];
+        
+        matches.forEach(match => {
+          const lowerMatch = match.toLowerCase();
+          if (!functionNames.includes(lowerMatch) && !constants.includes(lowerMatch)) {
+            variables.add(match);
+          }
+        });
+      }
+      
+      return Array.from(variables);
+    }
+
+    // Function to escape HTML
+    function escapeHTML(str) {
+      return str.replace(/[&<>"']/g, function(ch) {
+        const entities = {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        };
+        return entities[ch];
+      });
+    }
+    
+    // Function to apply syntax highlighting (based on mathexpressionUI.html approach)
+    function applySyntaxHighlighting(expr, inputElement) {
+      const ws = Blockly.getMainWorkspace();
+      const existingVars = [];
+      
+      // Get existing variables from workspace
+      if (ws && ws.getVariableMap) {
+        const variableMap = ws.getVariableMap();
+        if (variableMap) {
+          const vars = variableMap.getAllVariables();
+          for (let i = 0; i < vars.length; i++) {
+            const variable = vars[i];
+            if (!existingVars.includes(variable.name)) {
+              existingVars.push(variable.name);
+            }
+          }
+        }
+      }
+      
+      // Get the syntax highlighting element
+      const syntaxHighlight = document.getElementById('syntaxHighlight');
+      if (!syntaxHighlight) return;
+      
+      // Escape HTML and apply highlighting
+      const safe = escapeHTML(expr);
+      
+      // Use a more robust approach similar to mathexpressionUI.html
+      // Process the original text, not HTML
+      const tokens = [];
+      let lastIndex = 0;
+      
+      // Find all tokens in the original expression
+      const tokenPatterns = [
+        { pattern: /("(?:\\.|[^"])*"|'(?:\\.|[^'])*')/g, type: 'string' },
+        { pattern: /(\\b\\d+(?:\\.\\d+)?\\b)/g, type: 'number' },
+        { pattern: /(==|!=|<=|>=|&&|\\|\\||[+\\-*/%<>!^=])/g, type: 'operator' },
+        { pattern: /([(){}\\[\\]])/g, type: 'parenthesis' },
+        { pattern: /(\\b[a-zA-Z_]\\w*\\b)/g, type: 'identifier' }
+      ];
+      
+      // Collect all matches with their positions
+      tokenPatterns.forEach(({ pattern, type }) => {
+        let match;
+        while ((match = pattern.exec(expr)) !== null) {
+          tokens.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            text: match[0],
+            type: type
+          });
+        }
+      });
+      
+      // Sort tokens by position
+      tokens.sort((a, b) => a.start - b.start);
+      
+      // Build highlighted HTML
+      let highlighted = '';
+      let currentPos = 0;
+      
+      tokens.forEach(token => {
+        // Add any text before this token
+        if (token.start > currentPos) {
+          highlighted += escapeHTML(expr.substring(currentPos, token.start));
+        }
+        
+        // Add the highlighted token
+        let className = '';
+        switch (token.type) {
+          case 'string':
+            className = 'syntax-string';
+            break;
+          case 'number':
+            className = 'syntax-number';
+            break;
+          case 'operator':
+            if (['&&', '||', '!'].includes(token.text)) {
+              className = 'syntax-logical';
+            } else if (['==', '!=', '<=', '>=', '<', '>'].includes(token.text)) {
+              className = 'syntax-comparison';
+            } else {
+              className = 'syntax-operator';
+            }
+            break;
+          case 'parenthesis':
+            className = 'syntax-parenthesis';
+            break;
+          case 'identifier':
+            const functions = ['sin', 'cos', 'tan', 'log', 'ln', 'sqrt', 'abs', 'exp'];
+            const constants = ['pi', 'e', 'i', 'infinity', 'true', 'false'];
+            const lowerText = token.text.toLowerCase();
+            
+            if (functions.includes(lowerText) || constants.includes(lowerText)) {
+              className = 'syntax-function';
+            } else if (existingVars.includes(token.text)) {
+              className = 'syntax-variable';
+            } else {
+              className = 'syntax-new-variable';
+            }
+            break;
+        }
+        
+        highlighted += '<span class="' + className + '">' + escapeHTML(token.text) + '</span>';
+        currentPos = token.end;
+      });
+      
+      // Add any remaining text
+      if (currentPos < expr.length) {
+        highlighted += escapeHTML(expr.substring(currentPos));
+      }
+      
+      syntaxHighlight.innerHTML = highlighted;
+    }
+
+    // Function to analyze expression in real-time
+    function analyzeExpression(expr) {
+      if (!expr.trim()) {
+        return {
+          type: 'empty',
+          message: 'Enter an expression to analyze...',
+          color: '#666',
+          valid: false,
+          variables: { existing: [], new: [] }
+        };
+      }
+
+      try {
+        // Extract variables from the expression
+        const variables = extractVariables(expr);
+        const ws = Blockly.getMainWorkspace();
+        const existingVars = [];
+        const newVars = [];
+        
+        variables.forEach(varName => {
+          const existingVar = ws.getVariable(varName);
+          if (existingVar) {
+            existingVars.push(varName);
+          } else {
+            newVars.push(varName);
+          }
+        });
+        
+        // Check for logical operators first
+        const hasLogicalOps = expr.includes('&&') || expr.includes('||') || expr.startsWith('!');
+        const hasComparisonOps = /[=<>!]/.test(expr);
+        
+        if (hasLogicalOps || hasComparisonOps) {
+          // Try to parse as logical expression
+          if (hasLogicalOps) {
+            // For complex logical expressions, we'll do basic validation
+            const logicalOpCount = (expr.match(/&&/g) || []).length + (expr.match(/\\|\\|/g) || []).length + (expr.startsWith('!') ? 1 : 0);
+            
+            if (logicalOpCount > 1) {
+              // Complex logical expression - do basic syntax check
+              const parenCount = (expr.match(/\\(/g) || []).length - (expr.match(/\\)/g) || []).length;
+              if (parenCount !== 0) {
+                return {
+                  type: 'logical',
+                  message: '⚠️ Unmatched parentheses in logical expression',
+                  color: '#ff9800',
+                  valid: false,
+                  variables: { existing: existingVars, new: newVars }
+                };
+              }
+              return {
+                type: 'logical',
+                message: '✅ Complex logical expression (multiple operators)',
+                color: '#4CAF50',
+                valid: true,
+                variables: { existing: existingVars, new: newVars }
+              };
+            } else {
+              // Simple logical expression
+              return {
+                type: 'logical',
+                message: '✅ Simple logical expression',
+                color: '#4CAF50',
+                valid: true,
+                variables: { existing: existingVars, new: newVars }
+              };
+            }
+          } else {
+            // Just comparison operators
+            return {
+              type: 'comparison',
+              message: '✅ Comparison expression',
+              color: '#2196F3',
+              valid: true,
+              variables: { existing: existingVars, new: newVars }
+            };
+          }
+        } else {
+          // Try to parse as mathematical expression using math.js
+          if (typeof math !== 'undefined') {
+            try {
+              const node = math.parse(expr);
+              return {
+                type: 'mathematical',
+                message: '✅ Valid mathematical expression',
+                color: '#4CAF50',
+                valid: true,
+                variables: { existing: existingVars, new: newVars }
+              };
+            } catch (mathError) {
+              return {
+                type: 'mathematical',
+                message: \`❌ Math parse error: \${mathError.message}\`,
+                color: '#f44336',
+                valid: false,
+                variables: { existing: existingVars, new: newVars }
+              };
+            }
+          } else {
+            // Fallback to basic validation if math.js isn't loaded yet
+            const parenCount = (expr.match(/\\(/g) || []).length - (expr.match(/\\)/g) || []).length;
+            if (parenCount !== 0) {
+              return {
+                type: 'mathematical',
+                message: '⚠️ Unmatched parentheses in mathematical expression',
+                color: '#ff9800',
+                valid: false,
+                variables: { existing: existingVars, new: newVars }
+              };
+            }
+            
+            const hasValidMathChars = /^[a-zA-Z0-9\\s\\+\\-\\*\\/\\^\\(\\)\\.,]+$/.test(expr);
+            if (!hasValidMathChars) {
+              return {
+                type: 'mathematical',
+                message: '⚠️ Invalid characters in mathematical expression',
+                color: '#ff9800',
+                valid: false,
+                variables: { existing: existingVars, new: newVars }
+              };
+            }
+            
+            if (/[\\+\\-\\*\\/\\^]{2,}/.test(expr)) {
+              return {
+                type: 'mathematical',
+                message: '⚠️ Consecutive operators detected',
+                color: '#ff9800',
+                valid: false,
+                variables: { existing: existingVars, new: newVars }
+              };
+            }
+            
+            return {
+              type: 'mathematical',
+              message: '✅ Valid mathematical expression (basic validation)',
+              color: '#4CAF50',
+              valid: true,
+              variables: { existing: existingVars, new: newVars }
+            };
+          }
+        }
+      } catch (error) {
+        return {
+          type: 'error',
+          message: \`❌ Parse error: \${error.message}\`,
+          color: '#f44336',
+          valid: false,
+          variables: { existing: [], new: [] }
+        };
+      }
+    }
+
+    // Real-time analysis and syntax highlighting
+    input.addEventListener('input', function() {
+      // Get the plain text from input field
+      const expr = this.value || '';
+      
+      // Show/hide placeholder
+      const placeholder = document.getElementById('expressionPlaceholder');
+      if (placeholder) {
+        placeholder.style.display = expr ? 'none' : 'block';
+      }
+      
+      // Apply syntax highlighting
+      applySyntaxHighlighting(expr, this);
+      
+      // Auto-resize textarea to fit content
+      this.style.height = '0px';
+      this.style.height = Math.max(48, this.scrollHeight) + 'px';
+      
+      const analysis = analyzeExpression(expr);
+      
+      // Build status text with variable information
+      let statusText = analysis.message;
+      
+      // Add variable information
+      if (analysis.variables.existing.length > 0 || analysis.variables.new.length > 0) {
+        statusText += ' | ';
+        
+        if (analysis.variables.existing.length > 0) {
+          statusText += \`Existing: \${analysis.variables.existing.join(', ')}\`;
+        }
+        
+        if (analysis.variables.new.length > 0) {
+          if (analysis.variables.existing.length > 0) statusText += ' | ';
+          statusText += \`New: \${analysis.variables.new.join(', ')}\`;
+        }
+      }
+      
+      // Add history indicator if browsing history
+      if (currentHistoryIndex >= 0) {
+        statusText += \` (History: \${currentHistoryIndex + 1}/\${expressionHistory.length})\`;
+      }
+      
+      statusDiv.textContent = statusText;
+      
+      // Apply modern styling based on analysis type
+      switch (analysis.type) {
+        case 'empty':
+          statusDiv.style.backgroundColor = '#1f2937';
+          statusDiv.style.color = '#9ca3af';
+          statusDiv.style.borderColor = '#374151';
+          break;
+        case 'mathematical':
+        case 'logical':
+        case 'comparison':
+          statusDiv.style.backgroundColor = '#065f46';
+          statusDiv.style.color = '#6ee7b7';
+          statusDiv.style.borderColor = '#10b981';
+          break;
+        case 'error':
+          statusDiv.style.backgroundColor = '#7f1d1d';
+          statusDiv.style.color = '#fca5a5';
+          statusDiv.style.borderColor = '#ef4444';
+          break;
+        default:
+          statusDiv.style.backgroundColor = '#1e40af';
+          statusDiv.style.color = '#93c5fd';
+          statusDiv.style.borderColor = '#3b82f6';
+      }
+      
+      // Update button state
+      convertBtn.disabled = !analysis.valid;
+    });
+
+    // Initial analysis
+    input.dispatchEvent(new Event('input'));
+
+    // Convert function
+    const convert = () => {
+      const expr = input.value;
+      if (!expr) return;
+      
+      const analysis = analyzeExpression(expr);
+      if (!analysis.valid) {
+        alert('Please fix the expression before converting.');
+        return;
+      }
+
+      // Add to history only if conversion is successful
+      addToHistory(expr);
+
+      try {
+        // math.js is already loaded, so we can use it directly
+        const ws = Blockly.getMainWorkspace();
+        let root;
+        const hasLogicalOps = expr.includes('&&') || expr.includes('||') || expr.startsWith('!');
+        const logicalOpCount = (expr.match(/&&/g) || []).length + (expr.match(/\\|\\|/g) || []).length + (expr.startsWith('!') ? 1 : 0);
+
+        if (hasLogicalOps && logicalOpCount > 1) {
+          root = parseComplexLogicalExpression(expr, ws);
+        } else if (hasLogicalOps) {
+          // Handle simple logical expressions
+          if (expr.includes('&&')) {
+            const parts = expr.split('&&');
+            if (parts.length !== 2) {
+              throw new Error('Invalid logical expression format');
+            }
+            const leftExpr = parts[0].trim();
+            const rightExpr = parts[1].trim();
+            
+            if (!isValidBooleanExpr(leftExpr) || !isValidBooleanExpr(rightExpr)) {
+              throw new Error('Invalid logical expression operands');
+            }
+            
+            const leftNode = math.parse(leftExpr);
+            const rightNode = math.parse(rightExpr);
+            const leftBlock = astToBlocks_mathjs(leftNode, ws);
+            const rightBlock = astToBlocks_mathjs(rightNode, ws);
+            
+            let logicBlock = ws.newBlock('logic_operation');
+            logicBlock.setFieldValue('AND', 'OP');
+            logicBlock.getInput('A').connection.connect(leftBlock.outputConnection);
+            logicBlock.getInput('B').connection.connect(rightBlock.outputConnection);
+            logicBlock.initSvg(); logicBlock.render();
+            root = logicBlock;
+          } else if (expr.includes('||')) {
+            const parts = expr.split('||');
+            if (parts.length !== 2) {
+              throw new Error('Invalid logical expression format');
+            }
+            const leftExpr = parts[0].trim();
+            const rightExpr = parts[1].trim();
+            
+            if (!isValidBooleanExpr(leftExpr) || !isValidBooleanExpr(rightExpr)) {
+              throw new Error('Invalid logical expression operands');
+            }
+            
+            const leftNode = math.parse(leftExpr);
+            const rightNode = math.parse(rightExpr);
+            const leftBlock = astToBlocks_mathjs(leftNode, ws);
+            const rightBlock = astToBlocks_mathjs(rightNode, ws);
+            
+            let logicBlock = ws.newBlock('logic_operation');
+            logicBlock.setFieldValue('OR', 'OP');
+            logicBlock.getInput('A').connection.connect(leftBlock.outputConnection);
+            logicBlock.getInput('B').connection.connect(rightBlock.outputConnection);
+            logicBlock.initSvg(); logicBlock.render();
+            root = logicBlock;
+          } else if (expr.startsWith('!')) {
+            const innerExpr = expr.substring(1).trim();
+            if (!isValidBooleanExpr(innerExpr)) {
+              throw new Error('Invalid logical expression operand');
+            }
+            
+            const innerNode = math.parse(innerExpr);
+            const innerBlock = astToBlocks_mathjs(innerNode, ws);
+            
+            let notBlock = ws.newBlock('logic_negate');
+            notBlock.getInput('BOOL').connection.connect(innerBlock.outputConnection);
+            notBlock.initSvg(); notBlock.render();
+            root = notBlock;
+          }
+        } else {
+          const node = math.parse(expr);
+          root = astToBlocks_mathjs(node, ws);
+        }
+
+        // Position the block in the center of the workspace view
+        const metrics = ws.getMetrics();
+        const viewCenterX = metrics.viewLeft + metrics.viewWidth / 2;
+        const viewCenterY = metrics.viewTop + metrics.viewHeight / 2;
+        root.moveBy(viewCenterX, viewCenterY);
+
+        // Close the overlay
+        overlay.remove();
+      } catch (e) {
+        console.error('Error converting expression:', e);
+        alert('Error converting expression: ' + e.message);
+      }
+    };
+
+    // Event listeners
+    convertBtn.addEventListener('click', convert);
+    cancelBtn.addEventListener('click', () => overlay.remove());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        convert();
+      } else if (e.key === 'Escape') {
+        overlay.remove();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        navigateHistory('up');
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        navigateHistory('down');
+      }
+    });
+
+    // Close on overlay click
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.remove();
+      }
+    });
+  }
+
+  // Add keyboard shortcut: Shift+C
+  document.addEventListener('keydown', function(e) {
+    if (e.key.toLowerCase() === 'c' && e.shiftKey) {
+      // Check if we're currently typing in an input field, textarea, or contenteditable element
+      const activeElement = document.activeElement;
+      const isTyping = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.contentEditable === 'true' ||
+        activeElement.isContentEditable
+      );
+      
+      // Only trigger if we're not typing
+      if (!isTyping) {
+        e.preventDefault();
+        showExpressionInput();
+        console.log('pressed Show');
+      }
+    }
+  });
+
+  console.log('%c[Shift+C enabled] Type a math expression and convert it into blocks.', 'color: lime; font-weight: bold;');
+})();
+`;
+}
+</script>
