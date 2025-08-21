@@ -2,7 +2,7 @@
 
 A collection of powerful plugins that enhance the Verge3D puzzle editor with advanced functionality, keyboard shortcuts, and improved workflow tools.
 
-## �� Features
+## Features
 
 ### Math Expression Plugin - Shift+C
 Convert mathematical and logical expressions directly into Verge3D puzzles using a keyboard shortcut.
