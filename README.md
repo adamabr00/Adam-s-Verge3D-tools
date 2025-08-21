@@ -1,0 +1,1 @@
+Download the "Adam's Verge3D Tools" folder and place it in your Verge3D app folder. See link for more details if you are having trouble: https://www.soft8soft.com/docs/manual/en/puzzles/Plugins.html#installing
