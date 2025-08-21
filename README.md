@@ -7,6 +7,8 @@ A collection of powerful plugins that enhance the Verge3D puzzle editor with adv
 ### Math Expression Plugin - Shift+C
 Convert mathematical and logical expressions directly into Verge3D puzzles using a keyboard shortcut.
 
+![Mathexpression](https://github.com/user-attachments/assets/2a269b99-17eb-451e-b2bf-c83bcd032580)
+
 **Key Features:**
 - **Real-time parsing** with syntax highlighting for mathematical expressions
 - **Support for complex operations** including arithmetic (+, -, *, /, ^), trigonometric functions (sin, cos, tan), comparisons (==, !=, >, <, >=, <=), and logical operators (&&, ||, !)
@@ -34,6 +36,8 @@ Adds convenient keyboard shortcuts for common puzzle operations, enhancing the u
 ### Add Menu Plugin - Q & Shift+A
 Provides two powerful menu systems for quickly adding puzzles to the workspace using keyboard shortcuts.
 
+![AddMenu](https://github.com/user-attachments/assets/e66fcea0-bb20-4078-a7cb-6b13bcf4dec5)
+
 **Q Key - Favorites Menu:**
 - Opens a popup with commonly used puzzles (if statements, comparisons, math operations, variables, loops, etc.)
 - Displays puzzles with category colors and descriptions
@@ -58,6 +62,8 @@ Provides two powerful menu systems for quickly adding puzzles to the workspace u
 
 ### Improved Search Plugin - Shift+F
 Provides an advanced search interface for finding puzzles across all tabs in the workspace.
+
+![SearchPuzzles](https://github.com/user-attachments/assets/fce8c832-2b48-481d-9e4e-4337935e9e3b)
 
 **Key Features:**
 - **Cross-tab search** - Searches through all tabs simultaneously
