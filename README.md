@@ -24,6 +24,8 @@ Convert mathematical and logical expressions directly into Verge3D puzzles using
 ### Keyboard Shortcuts Plugin
 Adds convenient keyboard shortcuts for common puzzle operations, enhancing the user experience in the puzzle editor.
 
+![ShortCutPuzzles](https://github.com/user-attachments/assets/9b0871e3-3e48-46ed-abb9-1a769367bf29)
+
 **Key Features:**
 - **X key** - Deletes the selected puzzle (same action as Delete key)
 - **Shift+D** - Duplicates the selected puzzle
