@@ -80,6 +80,20 @@ Provides an advanced search interface for finding puzzles across all tabs in the
 
 **Usage:** Press **Shift+F** to open search (pre-fills with selected puzzle type if available). Type to search across all puzzles in all tabs, use arrow keys to navigate results, and press Enter to jump to the highlighted puzzle.
 
+### G-Drag Puzzles Plugin
+Provides an simple block dragging interface with connection preservation and restoration.
+
+![GrabPuzzle](https://github.com/user-attachments/assets/ec6fb249-ef14-45e1-b1d3-dd93ec592a90)
+
+**Key Features:**
+- **Keyboard shortcut** - Press **G** to grab the selected block
+- **Smart connection handling** - Preserves all block connections (value, statement, input) during drag operations
+- **Click to drop** - Simple click interface for precise placement
+- **Right-click restore** - Restores the block to its original position with all connections intact
+
+**Usage:** Select any block in the workspace, then press **G** to initiate drag mode. Click anywhere to drop the block in its new position, or right-click to cancel and restore the block to its original location with all connections preserved.
+
+
 ## 🛠️ Installation
 
 1. Copy the `.block` files to your Verge3D puzzle editor plugins directory
