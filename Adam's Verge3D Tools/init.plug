@@ -4,6 +4,7 @@
     <block type="minimap"></block>
     <block type="addMenuBlock"></block> 
     <block type="mathExpression"></block>
+    <block type="grabBlock"></block>
 </category>
 
 <script>
