@@ -38,7 +38,7 @@ Adds convenient keyboard shortcuts for common puzzle operations, enhancing the u
 ### Add Menu Plugin - Q & Shift+A
 Provides two powerful menu systems for quickly adding puzzles to the workspace using keyboard shortcuts.
 
-![AddMenu](https://github.com/user-attachments/assets/e66fcea0-bb20-4078-a7cb-6b13bcf4dec5)
+![AddMenuV2](https://github.com/user-attachments/assets/98ea11a7-95f9-4a8d-9818-17e9c966e49a)
 
 **Q Key - Favorites Menu:**
 - Opens a popup with commonly used puzzles (if statements, comparisons, math operations, variables, loops, etc.)
@@ -51,6 +51,7 @@ Provides two powerful menu systems for quickly adding puzzles to the workspace u
 - **Fuzzy search** using Fuse.js for intelligent matching
 - **Variable integration** - search and create variable get blocks
 - **Procedure integration** - search and create procedure call blocks
+- **Supports Shadow Defaults** - Brings in the default values found in the toolbox
 - **Smart suggestions** - offers to create new variables/procedures if they don't exist
 - **Keyboard shortcuts:**
   - Shift+Enter: Create new variable
