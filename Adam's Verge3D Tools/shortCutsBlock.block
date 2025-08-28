@@ -1,6 +1,6 @@
 <template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts: X to delete, Shift+D to duplicate, M to disable/enable selected blocks.">
     <dummy>
-        <label>Add Delete & Duplicate Shortcut</label>
+        <label>Delete - Duplicate - Disable - Shortcuts</label>
     </dummy>
 </template>
 

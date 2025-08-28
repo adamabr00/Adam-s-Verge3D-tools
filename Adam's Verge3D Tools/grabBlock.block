@@ -1,6 +1,6 @@
 <template color="#3b82f6" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press G to grab and drag the selected block. Click to drop, right-click to cancel and restore connections.">
   <dummy>
-    <label>G-Drag Selected Block (click to drop, right-click to restore incl. statement inputs)</label>
+    <label>G-Drag Selected Block</label>
   </dummy>
 </template>
 
