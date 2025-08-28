@@ -1,4 +1,4 @@
-<template color="#de3900">
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+A to add search and add blocks to the workspace!">
     <dummy>
         <label>Add Menu</label>
     </dummy>

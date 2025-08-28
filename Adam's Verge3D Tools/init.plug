@@ -1,10 +1,39 @@
 <category name="Adam's Custom Tools" color="#de3900">
+     <!-- Master block with pre-filled statement chain -->
+  <block type="Adam's Awesome Tools/masterBlock">
+    <statement name="DO">
+      <block type="Adam's Awesome Tools/shortCutsBlock">
+        <next>
+          <block type="Adam's Awesome Tools/improvedSearch">
+            <next>
+              <block type="Adam's Awesome Tools/minimap">
+                <next>
+                  <block type="Adam's Awesome Tools/addMenuBlock">
+                    <next>
+                      <block type="Adam's Awesome Tools/grabBlock">
+                        <next>
+                          <block type="Adam's Awesome Tools/mathExpression"></block>
+                        </next>
+                      </block>
+                    </next>
+                  </block>
+                </next>
+              </block>
+            </next>
+          </block>
+        </next>
+      </block>
+    </statement>
+  </block>
+    
     <block type="shortCutsBlock"></block>
     <block type="improvedSearch"></block>
     <block type="minimap"></block>
     <block type="addMenuBlock"></block> 
-    <block type="mathExpression"></block>
     <block type="grabBlock"></block>
+    <block type="mathExpression"></block>
+
+
 </category>
 
 <script>

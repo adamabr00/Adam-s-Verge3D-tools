@@ -1,6 +1,6 @@
-<template color="#de3900">
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+F to open enhanced search with tab navigation. Find blocks across all tabs with keyboard shortcuts.">
     <dummy>
-        <label>Improved Search (Shift+F)</label>
+        <label>Improved Search (Per Tab Navigation, Clean & Fixed)</label>
     </dummy>
 </template>
 

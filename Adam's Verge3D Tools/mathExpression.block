@@ -1,4 +1,4 @@
-<template color="#4a90e2">
+<template color="#4a90e2" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+C to convert mathematical expressions into blocks. Supports arithmetic, logical operations, and variables.">
     <dummy>
         <label>Enable Math Expression Input (Shift+C)</label>
     </dummy>

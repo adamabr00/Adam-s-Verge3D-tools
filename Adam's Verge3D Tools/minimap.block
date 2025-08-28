@@ -1,4 +1,4 @@
-<template color="#de3900">
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds a draggable minimap panel to navigate large workspaces. Shows all blocks and current viewport position.">
     <dummy>
         <label>Add Minimap</label>
     </dummy>
