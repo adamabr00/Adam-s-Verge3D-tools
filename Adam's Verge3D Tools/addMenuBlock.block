@@ -1,6 +1,6 @@
 <template color="#de3900">
     <dummy>
-        <label>Add Menu (Shift+A)</label>
+        <label>Add Menu</label>
     </dummy>
 </template>
 
@@ -100,17 +100,81 @@ function getAllProcedures() {
   }
 }
 
-// Helper function to create a block at cursor position
+// Helper function to find block XML in toolbox
+function findBlockXmlInToolbox(blockType) {
+  // Check cache first
+  if (toolboxBlockCache.has(blockType)) {
+    return toolboxBlockCache.get(blockType);
+  }
+
+  const workspace = Blockly.getMainWorkspace();
+  if (!workspace || !workspace.options || !workspace.options.languageTree) {
+    return null;
+  }
+
+  try {
+    // Recursively search through the toolbox structure
+    function searchInContents(contents) {
+      for (const item of contents) {
+        if (item.blockxml && item.blockxml.getAttribute('type') === blockType) {
+          return item.blockxml.outerHTML;
+        }
+        if (item.contents && Array.isArray(item.contents)) {
+          const result = searchInContents(item.contents);
+          if (result) return result;
+        }
+      }
+      return null;
+    }
+
+    const xmlText = searchInContents(workspace.options.languageTree.contents);
+    
+    // Cache the result (even if null, to avoid repeated searches)
+    toolboxBlockCache.set(blockType, xmlText);
+    
+    return xmlText;
+  } catch (error) {
+    console.warn('Failed to search toolbox for block type:', blockType, error);
+    // Cache null to avoid repeated failed searches
+    toolboxBlockCache.set(blockType, null);
+    return null;
+  }
+}
+
+// Helper function to create a block at cursor position with shadow blocks
 function createBlockAtCursor(type, variableId = null) {
   const fakeMouseEvent = { clientX: lastMouseX, clientY: lastMouseY, button: 0 };
   const workspace = Blockly.getMainWorkspace();
   if (!workspace) return null;
 
   try {
-    const block = workspace.newBlock(type);
-    block.initSvg();
-    if (variableId) block.setFieldValue(variableId, 'VAR');
+    let block;
+    
+    // Try to get the block with shadow blocks from toolbox first
+    const xmlText = findBlockXmlInToolbox(type);
+    if (xmlText) {
+      try {
+        const dom = Blockly.Xml.textToDom(xmlText);
+        block = Blockly.Xml.domToBlock(dom, workspace);
+        console.log('✅ Created block with shadow blocks from toolbox:', type);
+      } catch (xmlError) {
+        console.warn('Failed to create block from toolbox XML, falling back to newBlock:', xmlError);
+        block = workspace.newBlock(type);
+        block.initSvg();
+      }
+    } else {
+      // Fallback to creating empty block
+      block = workspace.newBlock(type);
+      block.initSvg();
+      console.log('⚠️ Created empty block (no toolbox XML found):', type);
+    }
 
+    // Set variable ID if provided
+    if (variableId) {
+      block.setFieldValue(variableId, 'VAR');
+    }
+
+    // Position the block at cursor
     const pt = Blockly.browserEvents.mouseToSvg(fakeMouseEvent, workspace.getParentSvg(), workspace.getInverseScreenCTM());
     const origin = workspace.getOriginOffsetInPixels();
     const workspaceX = (pt.x - origin.x) / workspace.scale;
@@ -135,6 +199,9 @@ const MAX_HEIGHT = 300;
 // Block database - loaded from external file
 let blockDatabase = null;
 
+// Cache for toolbox block XML to improve performance
+let toolboxBlockCache = new Map();
+
 // Load block database from global variable
 function loadBlockDatabase() {
   // Use the globally loaded database from init.plug
@@ -144,6 +211,39 @@ function loadBlockDatabase() {
   } else {
     console.warn('❌ Global block database not available, using fallback');
     blockDatabase = { blocks: {}, categories: {} };
+  }
+}
+
+// Preload toolbox block cache for better performance
+function preloadToolboxCache() {
+  const workspace = Blockly.getMainWorkspace();
+  if (!workspace || !workspace.options || !workspace.options.languageTree) {
+    console.warn('❌ Cannot preload toolbox cache - workspace not ready');
+    return;
+  }
+
+  try {
+    let cacheCount = 0;
+    
+    function cacheBlocksInContents(contents) {
+      for (const item of contents) {
+        if (item.blockxml) {
+          const blockType = item.blockxml.getAttribute('type');
+          if (blockType && !toolboxBlockCache.has(blockType)) {
+            toolboxBlockCache.set(blockType, item.blockxml.outerHTML);
+            cacheCount++;
+          }
+        }
+        if (item.contents && Array.isArray(item.contents)) {
+          cacheBlocksInContents(item.contents);
+        }
+      }
+    }
+
+    cacheBlocksInContents(workspace.options.languageTree.contents);
+    console.log('✅ Preloaded ' + cacheCount + ' blocks into toolbox cache');
+  } catch (error) {
+    console.warn('❌ Failed to preload toolbox cache:', error);
   }
 }
 
@@ -371,6 +471,11 @@ function searchBlocksFallback(query) {
     return [];
   }
   
+  // Return empty array if no search term
+  if (!query.trim()) {
+    return [];
+  }
+  
   const searchTerm = query.toLowerCase();
   const results = [];
   
@@ -414,6 +519,11 @@ function searchBlocksFallback(query) {
 
 // Fallback search function for variables when Fuse.js is not available
 function searchVariablesFallback(variables, searchTerm) {
+  // Return empty array if no search term
+  if (!searchTerm.trim()) {
+    return [];
+  }
+  
   return variables
     .filter(variable => 
       variable.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -438,6 +548,11 @@ function searchVariablesFallback(variables, searchTerm) {
 
 // Fallback search function for procedures when Fuse.js is not available
 function searchProceduresFallback(procedures, searchTerm) {
+  // Return empty array if no search term
+  if (!searchTerm.trim()) {
+    return [];
+  }
+  
   return procedures
     .filter(procedure => 
       procedure.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -472,6 +587,11 @@ async function showFavoritesPopup() {
   // Load database if not already loaded
   if (!blockDatabase) {
     loadBlockDatabase();
+  }
+  
+  // Preload toolbox cache for better performance
+  if (toolboxBlockCache.size === 0) {
+    preloadToolboxCache();
   }
   
   // Initialize Fuse.js if not already done
@@ -702,6 +822,11 @@ async function showSearchPopup() {
   // Load database if not already loaded
   if (!blockDatabase) {
     loadBlockDatabase();
+  }
+  
+  // Preload toolbox cache for better performance
+  if (toolboxBlockCache.size === 0) {
+    preloadToolboxCache();
   }
   
   // Initialize Fuse.js if not already done
