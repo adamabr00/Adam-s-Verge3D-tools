@@ -30,6 +30,7 @@ Adds convenient keyboard shortcuts for common puzzle operations, enhancing the u
 - **X key** - Deletes the selected puzzle (same action as Delete key)
 - **Shift+D** - Duplicates the selected puzzle
 - **M key** - Toggles disable/enable state of the selected puzzle
+- **C key** - Toggles collapse/expand state of the selected puzzle
 
 **Usage:** Select any puzzle in the workspace, then press **X** to delete it, **Shift+D** to create a duplicate, or **M** to toggle the puzzle's enabled/disabled state.
 
