@@ -1,0 +1,73 @@
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts: X to delete, Shift+D to duplicate, M to disable/enable selected blocks.">
+    <dummy>
+        <label>Delete - Duplicate - Disable - Shortcuts</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `(function() {
+  // ✅ Check if URL contains 'logic' parameter
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('logic')) {
+    console.log('%c[Shortcut Setup Skipped] No "logic" parameter in URL.', 'color: orange; font-weight: bold;');
+    return;
+  }
+
+  const registry = Blockly.ShortcutRegistry.registry;
+  const duplicateEntry = Blockly.ContextMenuRegistry.registry.registry_["blockDuplicate"];
+  const disableEntry = Blockly.ContextMenuRegistry.registry.registry_["blockDisable"];
+
+
+  // Map the X keycode to the existing 'delete' shortcut
+  registry.addKeyMapping('88', 'delete');
+
+  // Unregister duplicate_block if it already exists
+  if (registry.registry_['duplicate_block']) {
+      registry.unregister('duplicate_block');
+  }
+
+  // Register Shift+D for duplication
+  registry.register({
+    name: 'duplicate_block',
+    callback: function() {
+      const block = Blockly.selected;
+      if (block) {
+        duplicateEntry.callback({ block: block, workspace: Blockly.getMainWorkspace() });
+        return true;
+      }
+      return false;
+    },
+    keyCodes: ['68'], // D
+    modifiers: [Blockly.ShortcutRegistry.modifierKeys.SHIFT],
+    allowCollision: true
+  });
+
+  registry.addKeyMapping('Shift+68', 'duplicate_block');
+
+
+   // Register m for disable/enable
+  registry.register({
+    name: 'disable_block',
+    callback: function() {
+      const block = Blockly.selected;
+      if (block) {
+        disableEntry.callback({ block: block, workspace: Blockly.getMainWorkspace() });
+        return true;
+      }
+      return false;
+    },
+    keyCodes: ['77'], // m
+    modifiers: [],
+    allowCollision: true
+  });
+
+  registry.addKeyMapping('77', 'disable_block');
+
+  console.log('%c[X Shortcut Added] X now triggers the same delete action as the Delete key.', 'color: lime; font-weight: bold;');
+  console.log('%c[Shift+D Shortcut Added] Shift+D now duplicates the selected block.', 'color: lime; font-weight: bold;');
+  console.log('%c[m Shortcut Added] m now disables/enables the selected block.', 'color: lime; font-weight: bold;');
+
+})();`;
+}
+</script>
