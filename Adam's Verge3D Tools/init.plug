@@ -32,8 +32,6 @@
     <block type="addMenuBlock"></block> 
     <block type="grabBlock"></block>
     <block type="mathExpression"></block>
-    <block type="multiSelectBlock"></block>
-
 
 
 </category>
