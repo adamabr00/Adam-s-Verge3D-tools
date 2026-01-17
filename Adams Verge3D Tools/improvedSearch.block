@@ -19,8 +19,11 @@ function code(block) {
         let cachedBlocks = [];
         let searchTimeout = null;
         let highlightOverlay = null;
-        let highlightAnimationId = null;
+        let temporarilyExpandedBlocks = new Map(); // Track temporarily expanded blocks: blockId -> wasCollapsed
+        let currentCollapsedParentId = null; // Track current collapsed parent being viewed
         const DEBOUNCE_DELAY = 250; // milliseconds - wait 250ms after user stops typing
+        const TAB_SWITCH_DELAY = 10; // Delay for tab switching to complete
+        const EXPAND_RENDER_DELAY = 50; // Delay for block expansion to render
 
         // 🔹 Normalize for search
         function normalize(str) {
@@ -36,9 +39,8 @@ function code(block) {
 
             return tabs.map((tab, tabIndex) => {
                 const tabName = tab.getAttribute('name') || 'Unknown';
-                const blocks = [];
                 tab.querySelectorAll(':scope > block').forEach(block => processBlock(block, tabName, tabIndex));
-                return { tabName, tabIndex, blocks };
+                return { tabName, tabIndex };
             });
         }
 
@@ -216,7 +218,7 @@ function code(block) {
             
             hintsLabel.appendChild(createHintItem('↑↓', 'Navigate results'));
             hintsLabel.appendChild(createHintItem('←→', 'Switch tabs'));
-            hintsLabel.appendChild(createHintItem('Enter', 'Jump to block'));
+            hintsLabel.appendChild(createHintItem('Enter', 'Jump to result'));
             hintsLabel.appendChild(createHintItem('Esc', 'Close'));
 
             // Create close button as X in upper right corner
@@ -300,7 +302,13 @@ function code(block) {
                         : '1px solid #ffffff22',
                     color: (i === activeTabIndex) ? '#e6f0ff' : '#94a3b8'
                 });
-                el.onclick = () => { activeTabIndex = i; currentIndexInTab = 0; jumpToCurrent(); renderTabsBar(); };
+                el.onclick = () => {
+                    restoreBeforeNavigation();
+                    activeTabIndex = i; 
+                    currentIndexInTab = 0; 
+                    jumpToCurrent(); 
+                    renderTabsBar(); 
+                };
                 el.onmouseenter = () => {
                     if (i !== activeTabIndex) {
                         el.style.filter = 'brightness(1.1)';
@@ -326,19 +334,56 @@ function code(block) {
             if (e.key === 'ArrowDown') { cycleInTab(1); e.preventDefault(); }
             if (e.key === 'ArrowLeft') { switchTab(-1); e.preventDefault(); }
             if (e.key === 'ArrowRight') { switchTab(1); e.preventDefault(); }
-            if (e.key === 'Enter') { jumpToCurrent(); e.preventDefault(); }
+            if (e.key === 'Enter') {
+                // Jump to current (collapsed parents are automatically expanded)
+                jumpToCurrent();
+                e.preventDefault();
+            }
+        }
+
+        // 🔹 Restore collapsed state before navigation (if needed)
+        function restoreBeforeNavigation() {
+            if (currentCollapsedParentId) {
+                restoreCollapsedState(currentCollapsedParentId);
+            }
         }
 
         function cycleInTab(dir) {
             const tab = groupedResults[activeTabIndex];
+            const oldIndex = currentIndexInTab;
             currentIndexInTab = (currentIndexInTab + dir + tab.results.length) % tab.results.length;
-            jumpToCurrent(); renderTabsBar();
+            
+            // Check if we're moving to a different parent - restore if needed
+            if (currentCollapsedParentId && oldIndex !== currentIndexInTab) {
+                const ws = Blockly.getMainWorkspace();
+                const oldResult = tab.results[oldIndex];
+                const newResult = tab.results[currentIndexInTab];
+                
+                if (oldResult && newResult && ws) {
+                    const oldBlock = ws.getBlockById(oldResult.id);
+                    const newBlock = ws.getBlockById(newResult.id);
+                    
+                    if (oldBlock && newBlock) {
+                        const oldInParent = isBlockInsideParent(oldBlock, currentCollapsedParentId);
+                        const newInParent = isBlockInsideParent(newBlock, currentCollapsedParentId);
+                        
+                        if (oldInParent && !newInParent) {
+                            restoreCollapsedState(currentCollapsedParentId);
+                        }
+                    }
+                }
+            }
+            
+            jumpToCurrent(); 
+            renderTabsBar();
         }
 
         function switchTab(dir) {
+            restoreBeforeNavigation();
             activeTabIndex = (activeTabIndex + dir + groupedResults.length) % groupedResults.length;
             currentIndexInTab = 0;
-            jumpToCurrent(); renderTabsBar();
+            jumpToCurrent(); 
+            renderTabsBar();
         }
 
         // 🔹 Enhanced highlighting with custom visual effects
@@ -354,9 +399,28 @@ function code(block) {
             if (!workspace) return;
             
             // Get block position and size
+            // Use block's own height/width properties (not getHeightWidth which includes children)
             const pos = block.getRelativeToSurfaceXY();
-            const size = block.getHeightWidth();
             const scale = workspace.scale || 1;
+            
+            // Get the block's main path element bounding box for accurate size
+            // The pathObject contains the block's visual representation
+            let width, height;
+            if (block.pathObject && block.pathObject.svgPath) {
+                const pathBBox = block.pathObject.svgPath.getBBox && block.pathObject.svgPath.getBBox();
+                if (pathBBox && pathBBox.width > 0 && pathBBox.height > 0) {
+                    width = pathBBox.width;
+                    height = pathBBox.height;
+                } else {
+                    // Fallback to block's own dimensions
+                    width = block.width || 100;
+                    height = block.height || 40;
+                }
+            } else {
+                // Fallback to block's own dimensions
+                width = block.width || 100;
+                height = block.height || 40;
+            }
             
             // Create a group element that will be positioned relative to the block
             const highlightGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -367,17 +431,16 @@ function code(block) {
             const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
             rect.setAttribute('x', '-6');
             rect.setAttribute('y', '-6');
-            rect.setAttribute('width', String(size.width + 12));
-            rect.setAttribute('height', String(size.height + 12));
+            rect.setAttribute('width', String(width + 12));
+            rect.setAttribute('height', String(height + 12));
             rect.setAttribute('rx', '6');
             rect.setAttribute('ry', '6');
-            rect.setAttribute('fill', 'rgba(91, 140, 255, 0.15)');
+            rect.setAttribute('fill', 'none');
             rect.setAttribute('stroke', '#5b8cff');
             rect.setAttribute('stroke-width', String(Math.max(3, 4 / scale)));
             rect.setAttribute('stroke-dasharray', '10,5');
             rect.setAttribute('opacity', '1');
             rect.setAttribute('pointer-events', 'none');
-            rect.style.filter = 'drop-shadow(0 0 8px #5b8cff) drop-shadow(0 0 4px #5b8cff)';
             rect.style.vectorEffect = 'non-scaling-stroke';
             
             highlightGroup.appendChild(rect);
@@ -387,50 +450,102 @@ function code(block) {
             if (blockCanvas) {
                 blockCanvas.appendChild(highlightGroup);
                 highlightOverlay = highlightGroup;
-                
-                // Animate the highlight (pulsing effect)
-                let pulseDirection = -1;
-                let currentOpacity = 1;
-                const pulseSpeed = 0.06;
-                
-                function animatePulse() {
-                    if (!rect || !rect.parentNode) {
-                        if (highlightAnimationId) {
-                            cancelAnimationFrame(highlightAnimationId);
-                            highlightAnimationId = null;
-                        }
-                        return;
-                    }
-                    
-                    currentOpacity += pulseDirection * pulseSpeed;
-                    
-                    if (currentOpacity <= 0.4) {
-                        currentOpacity = 0.4;
-                        pulseDirection = 1;
-                    } else if (currentOpacity >= 1) {
-                        currentOpacity = 1;
-                        pulseDirection = -1;
-                    }
-                    
-                    rect.setAttribute('opacity', String(currentOpacity));
-                    highlightAnimationId = requestAnimationFrame(animatePulse);
-                }
-                
-                // Start animation
-                animatePulse();
             }
         }
         
         function removeCustomHighlight() {
-            if (highlightAnimationId) {
-                cancelAnimationFrame(highlightAnimationId);
-                highlightAnimationId = null;
-            }
-            
             if (highlightOverlay && highlightOverlay.parentNode) {
                 highlightOverlay.parentNode.removeChild(highlightOverlay);
                 highlightOverlay = null;
             }
+        }
+        
+        // 🔹 Temporarily expand a collapsed block
+        function temporarilyExpandBlock(block) {
+            if (!block || typeof block.isCollapsed !== 'function') return;
+            
+            // Only expand if it's collapsed
+            if (block.isCollapsed()) {
+                try {
+                    // Ensure block is rendered
+                    if (!block.rendered) {
+                        if (typeof block.initSvg === 'function') {
+                            block.initSvg();
+                        }
+                    }
+                    
+                    // Store the collapsed state
+                    temporarilyExpandedBlocks.set(block.id, true);
+                    // Expand the block
+                    block.setCollapsed(false);
+                    // Render to update visibility with error handling
+                    if (block.rendered && typeof block.render === 'function') {
+                        try {
+                            block.render();
+                            // Bring block and all its children to the front
+                            if (typeof block.bringToFront === 'function') {
+                                block.bringToFront();
+                            }
+                        } catch (e) {
+                            console.warn('[Search] Failed to render block during expand:', e);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[Search] Failed to expand block:', e);
+                }
+            }
+        }
+        
+        // 🔹 Restore collapsed state for a temporarily expanded block
+        function restoreCollapsedState(blockId) {
+            if (!temporarilyExpandedBlocks.has(blockId)) return;
+            
+            const ws = Blockly.getMainWorkspace();
+            if (!ws) {
+                temporarilyExpandedBlocks.delete(blockId);
+                return;
+            }
+            
+            const block = ws.getBlockById(blockId);
+            if (!block) {
+                temporarilyExpandedBlocks.delete(blockId);
+                return;
+            }
+            
+            // Restore collapsed state - called before switching tabs, so block is accessible
+            try {
+                if (block.rendered && typeof block.setCollapsed === 'function' && 
+                    typeof block.isCollapsed === 'function' && !block.isCollapsed()) {
+                    block.setCollapsed(true);
+                    if (typeof block.render === 'function') {
+                        block.render();
+                    }
+                }
+            } catch (e) {
+                console.warn('[Search] Failed to restore collapsed state:', e);
+            }
+            
+            temporarilyExpandedBlocks.delete(blockId);
+        }
+        
+        // 🔹 Restore all temporarily expanded blocks
+        function restoreAllCollapsedStates() {
+            temporarilyExpandedBlocks.forEach((_, blockId) => {
+                restoreCollapsedState(blockId);
+            });
+            temporarilyExpandedBlocks.clear();
+            currentCollapsedParentId = null;
+        }
+        
+        // 🔹 Check if a block is inside a specific parent
+        function isBlockInsideParent(block, parentId) {
+            if (!block) return false;
+            let current = block.getParent && block.getParent();
+            while (current) {
+                if (current.id === parentId) return true;
+                current = current.getParent && current.getParent();
+            }
+            return false;
         }
 
         // 🔹 Highlight the current result
@@ -449,32 +564,93 @@ function code(block) {
                 const b = ws.getBlockById(r.id);
                 if (!b) return;
                 
-                // Check if block is inside a collapsed parent
+                // Traverse parent chain once to find collapsed parent and temp expanded parent
                 let blockToHighlight = b;
+                let collapsedParent = null;
+                let tempExpandedParentId = null;
                 let parent = b.getParent && b.getParent();
                 
-                // Traverse up the parent chain to find the first collapsed parent
                 while (parent) {
-                    if (typeof parent.isCollapsed === 'function' && parent.isCollapsed()) {
-                        // Found a collapsed parent - highlight it instead
-                        blockToHighlight = parent;
-                        break;
+                    const isCollapsed = typeof parent.isCollapsed === 'function' && parent.isCollapsed();
+                    const isTemporarilyExpanded = temporarilyExpandedBlocks.has(parent.id);
+                    
+                    if (isCollapsed && !collapsedParent) {
+                        collapsedParent = parent;
+                    }
+                    if (isTemporarilyExpanded && !tempExpandedParentId) {
+                        tempExpandedParentId = parent.id;
                     }
                     parent = parent.getParent && parent.getParent();
                 }
                 
-                // Remove previous custom highlight
+                // Automatically expand collapsed parent if found
+                if (collapsedParent) {
+                    temporarilyExpandBlock(collapsedParent);
+                    if (typeof collapsedParent.bringToFront === 'function') {
+                        collapsedParent.bringToFront();
+                    }
+                    // After expanding, highlight the actual child block
+                    blockToHighlight = b;
+                    tempExpandedParentId = collapsedParent.id;
+                }
+                
+                const newParentId = collapsedParent ? collapsedParent.id : tempExpandedParentId;
+                
+                // Restore previous parent if moving away from it
+                if (currentCollapsedParentId && currentCollapsedParentId !== newParentId) {
+                    const stillInSameParent = newParentId === null && 
+                                             isBlockInsideParent(b, currentCollapsedParentId);
+                    if (!stillInSameParent) {
+                        restoreCollapsedState(currentCollapsedParentId);
+                    }
+                }
+                
+                currentCollapsedParentId = newParentId;
                 removeCustomHighlight();
                 
-                // Highlight and center on the appropriate block (parent if collapsed, otherwise the found block)
-                ws.centerOnBlock(blockToHighlight.id);
-                ws.highlightBlock(blockToHighlight.id);
-                
-                // Add enhanced custom highlight
-                addCustomHighlight(blockToHighlight);
-                
-                lastHighlightedId = blockToHighlight.id;
-            }, 10);
+                // Small delay if we expanded a parent to allow rendering
+                const delay = collapsedParent ? EXPAND_RENDER_DELAY : 0;
+                setTimeout(() => {
+                    ws.centerOnBlock(blockToHighlight.id);
+                    ws.highlightBlock(blockToHighlight.id);
+                    addCustomHighlight(blockToHighlight);
+                    lastHighlightedId = blockToHighlight.id;
+                }, delay);
+            }, TAB_SWITCH_DELAY);
+        }
+        
+        // 🔹 Expand collapsed parent to show child block
+        function expandCollapsedParent() {
+            if (!currentCollapsedParentId) return;
+            
+            const ws = Blockly.getMainWorkspace();
+            if (!ws) return;
+            
+            const parent = ws.getBlockById(currentCollapsedParentId);
+            if (parent) {
+                temporarilyExpandBlock(parent);
+                // Ensure parent is brought to front (bringToFront is called in temporarilyExpandBlock, but ensure it here too)
+                if (typeof parent.bringToFront === 'function') {
+                    parent.bringToFront();
+                }
+                // Re-highlight the actual child block now that parent is expanded
+                setTimeout(() => {
+                    const tab = groupedResults[activeTabIndex];
+                    if (tab) {
+                        const r = tab.results[currentIndexInTab];
+                        if (r) {
+                            const b = ws.getBlockById(r.id);
+                            if (b) {
+                                removeCustomHighlight();
+                                ws.centerOnBlock(b.id);
+                                ws.highlightBlock(b.id);
+                                addCustomHighlight(b);
+                                lastHighlightedId = b.id;
+                            }
+                        }
+                    }
+                }, EXPAND_RENDER_DELAY);
+            }
         }
 
         function doSearch() {
@@ -491,6 +667,9 @@ function code(block) {
                 
                 // Remove custom highlight
                 removeCustomHighlight();
+                
+                // Restore all temporarily expanded blocks
+                restoreAllCollapsedStates();
                 
                 searchOverlay.remove(); searchOverlay = null;
                 groupedResults = [];
