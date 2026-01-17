@@ -18,6 +18,8 @@ function code(block) {
         let lastHighlightedId = null;
         let cachedBlocks = [];
         let searchTimeout = null;
+        let highlightOverlay = null;
+        let highlightAnimationId = null;
         const DEBOUNCE_DELAY = 250; // milliseconds - wait 250ms after user stops typing
 
         // 🔹 Normalize for search
@@ -339,6 +341,98 @@ function code(block) {
             jumpToCurrent(); renderTabsBar();
         }
 
+        // 🔹 Enhanced highlighting with custom visual effects
+        function addCustomHighlight(block) {
+            removeCustomHighlight();
+            
+            if (!block || !block.rendered) return;
+            
+            const svgRoot = block.getSvgRoot && block.getSvgRoot();
+            if (!svgRoot) return;
+            
+            const workspace = Blockly.getMainWorkspace();
+            if (!workspace) return;
+            
+            // Get block position and size
+            const pos = block.getRelativeToSurfaceXY();
+            const size = block.getHeightWidth();
+            const scale = workspace.scale || 1;
+            
+            // Create a group element that will be positioned relative to the block
+            const highlightGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            highlightGroup.setAttribute('id', '__searchHighlightGroup__');
+            highlightGroup.setAttribute('transform', \`translate(\${pos.x}, \${pos.y})\`);
+            
+            // Create overlay rectangle (positioned relative to group)
+            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            rect.setAttribute('x', '-6');
+            rect.setAttribute('y', '-6');
+            rect.setAttribute('width', String(size.width + 12));
+            rect.setAttribute('height', String(size.height + 12));
+            rect.setAttribute('rx', '6');
+            rect.setAttribute('ry', '6');
+            rect.setAttribute('fill', 'rgba(91, 140, 255, 0.15)');
+            rect.setAttribute('stroke', '#5b8cff');
+            rect.setAttribute('stroke-width', String(Math.max(3, 4 / scale)));
+            rect.setAttribute('stroke-dasharray', '10,5');
+            rect.setAttribute('opacity', '1');
+            rect.setAttribute('pointer-events', 'none');
+            rect.style.filter = 'drop-shadow(0 0 8px #5b8cff) drop-shadow(0 0 4px #5b8cff)';
+            rect.style.vectorEffect = 'non-scaling-stroke';
+            
+            highlightGroup.appendChild(rect);
+            
+            // Get block canvas and add highlight group
+            const blockCanvas = workspace.getCanvas && workspace.getCanvas();
+            if (blockCanvas) {
+                blockCanvas.appendChild(highlightGroup);
+                highlightOverlay = highlightGroup;
+                
+                // Animate the highlight (pulsing effect)
+                let pulseDirection = -1;
+                let currentOpacity = 1;
+                const pulseSpeed = 0.06;
+                
+                function animatePulse() {
+                    if (!rect || !rect.parentNode) {
+                        if (highlightAnimationId) {
+                            cancelAnimationFrame(highlightAnimationId);
+                            highlightAnimationId = null;
+                        }
+                        return;
+                    }
+                    
+                    currentOpacity += pulseDirection * pulseSpeed;
+                    
+                    if (currentOpacity <= 0.4) {
+                        currentOpacity = 0.4;
+                        pulseDirection = 1;
+                    } else if (currentOpacity >= 1) {
+                        currentOpacity = 1;
+                        pulseDirection = -1;
+                    }
+                    
+                    rect.setAttribute('opacity', String(currentOpacity));
+                    highlightAnimationId = requestAnimationFrame(animatePulse);
+                }
+                
+                // Start animation
+                animatePulse();
+            }
+        }
+        
+        function removeCustomHighlight() {
+            if (highlightAnimationId) {
+                cancelAnimationFrame(highlightAnimationId);
+                highlightAnimationId = null;
+            }
+            
+            if (highlightOverlay && highlightOverlay.parentNode) {
+                highlightOverlay.parentNode.removeChild(highlightOverlay);
+                highlightOverlay = null;
+            }
+        }
+
         // 🔹 Highlight the current result
         function jumpToCurrent() {
             const tab = groupedResults[activeTabIndex];
@@ -369,9 +463,16 @@ function code(block) {
                     parent = parent.getParent && parent.getParent();
                 }
                 
+                // Remove previous custom highlight
+                removeCustomHighlight();
+                
                 // Highlight and center on the appropriate block (parent if collapsed, otherwise the found block)
                 ws.centerOnBlock(blockToHighlight.id);
                 ws.highlightBlock(blockToHighlight.id);
+                
+                // Add enhanced custom highlight
+                addCustomHighlight(blockToHighlight);
+                
                 lastHighlightedId = blockToHighlight.id;
             }, 10);
         }
@@ -388,9 +489,15 @@ function code(block) {
                 clearTimeout(searchTimeout);
                 searchTimeout = null;
                 
+                // Remove custom highlight
+                removeCustomHighlight();
+                
                 searchOverlay.remove(); searchOverlay = null;
                 groupedResults = [];
-                if (lastHighlightedId) { Blockly.getMainWorkspace().highlightBlock(null); lastHighlightedId = null; }
+                if (lastHighlightedId) { 
+                    Blockly.getMainWorkspace().highlightBlock(null); 
+                    lastHighlightedId = null; 
+                }
             }
         }
 
