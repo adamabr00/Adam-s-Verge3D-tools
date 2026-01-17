@@ -1,6 +1,6 @@
-<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts: X to delete, Shift+D to duplicate, M to disable/enable selected blocks.">
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts to the Puzzles editor: X for delete, Shift+D for duplicate, M for disable/enable, C for collapse/expand blocks.">
     <dummy>
-        <label>Delete - Duplicate - Disable - Shortcuts</label>
+        <label>Keyboard Shortcuts (X, Shift+D, M, C)</label>
     </dummy>
 </template>
 
@@ -10,13 +10,13 @@ function code(block) {
   // ✅ Check if URL contains 'logic' parameter
   const params = new URLSearchParams(window.location.search);
   if (!params.has('logic')) {
-    console.log('%c[Shortcut Setup Skipped] No "logic" parameter in URL.', 'color: orange; font-weight: bold;');
     return;
   }
 
   const registry = Blockly.ShortcutRegistry.registry;
   const duplicateEntry = Blockly.ContextMenuRegistry.registry.registry_["blockDuplicate"];
   const disableEntry = Blockly.ContextMenuRegistry.registry.registry_["blockDisable"];
+  const collapseEntry = Blockly.ContextMenuRegistry.registry.registry_["blockCollapseExpand"];
 
 
   // Map the X keycode to the existing 'delete' shortcut
@@ -64,9 +64,30 @@ function code(block) {
 
   registry.addKeyMapping('77', 'disable_block');
 
-  console.log('%c[X Shortcut Added] X now triggers the same delete action as the Delete key.', 'color: lime; font-weight: bold;');
-  console.log('%c[Shift+D Shortcut Added] Shift+D now duplicates the selected block.', 'color: lime; font-weight: bold;');
-  console.log('%c[m Shortcut Added] m now disables/enables the selected block.', 'color: lime; font-weight: bold;');
+  // Unregister collapse_block if it already exists
+  if (registry.registry_['collapse_block']) {
+      registry.unregister('collapse_block');
+  }
+
+  // Register C for collapse/expand
+  registry.register({
+    name: 'collapse_block',
+    callback: function() {
+      const block = Blockly.selected;
+      if (block) {
+        collapseEntry.callback({ block: block, workspace: Blockly.getMainWorkspace() });
+        return true;
+      }
+      return false;
+    },
+    keyCodes: ['67'], // C
+    modifiers: [],
+    allowCollision: true
+  });
+
+  registry.addKeyMapping('67', 'collapse_block');
+
+
 
 })();`;
 }

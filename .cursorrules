@@ -1,0 +1,192 @@
+# Verge3D Puzzles Plugin Development Rules
+
+This project contains Verge3D Puzzles plugins. When working with plugin files, follow these rules and conventions.
+
+## Project Structure
+
+- Plugin files are located in `Adams Verge3D Tools/` directory
+- Each plugin consists of:
+  - `init.plug` - Mandatory plugin configuration file
+  - `*.block` files - Individual puzzle block definitions
+- Reference documentation: `VERGE3D_PLUGINS_REFERENCE.md`
+
+## init.plug File Rules
+
+### Block Type References
+
+**CRITICAL**: When referencing blocks in `init.plug`:
+
+1. **Same-plugin blocks**: Use short name (filename without `.block` extension)
+   ```xml
+   <block type="masterBlock"></block>  <!-- NOT "Adam's Awesome Tools/masterBlock" -->
+   ```
+
+2. **Other plugins' blocks**: Use `PLUGIN_DIRECTORY_NAME/BLOCK_NAME` format
+   ```xml
+   <block type="E-Commerce/placeOrder"></block>
+   ```
+
+3. **Stock blocks**: Use stock type name
+   ```xml
+   <block type="math_number"></block>
+   ```
+
+### Category Element
+
+- **MANDATORY**: `<category>` element is required or plugin won't load
+- Always include `name` and `color` attributes
+- Block order in XML determines toolbox order
+
+### Statement Inputs with Child Blocks
+
+When defining statement inputs with pre-filled child blocks in `init.plug`:
+- Use short block type names for same-plugin blocks
+- Use `<next>` elements to chain blocks
+- Example:
+  ```xml
+  <block type="masterBlock">
+    <statement name="DO">
+      <block type="shortCutsBlock">
+        <next>
+          <block type="improvedSearch"></block>
+        </next>
+      </block>
+    </statement>
+  </block>
+  ```
+
+## .block File Rules
+
+### Template Element
+
+- Use XML `<template>` element for block appearance (simpler than JavaScript `template()`)
+- Always include `color` attribute
+- Include `tooltip` for better UX
+- Use `prev="true"` and/or `next="true"` for statement blocks
+- Use `output=""` for value-returning blocks
+
+### Code Function
+
+**CRITICAL PATTERNS**:
+
+1. **Statement inputs**: Use `Blockly.JavaScript.statementToCode()` and wrap in function if needed
+   ```javascript
+   const code = Blockly.JavaScript.statementToCode(block, 'DO') || '';
+   ```
+
+2. **Value inputs**: Use `Blockly.JavaScript.valueToCode()` with fallback
+   ```javascript
+   const value = Blockly.JavaScript.valueToCode(block, 'INPUT', 
+       Blockly.JavaScript.ORDER_NONE) || `''`;
+   ```
+
+3. **Field values**: Use `block.getFieldValue()`
+   ```javascript
+   const checkbox = block.getFieldValue('myCheckbox') === 'TRUE';
+   ```
+
+4. **Code bloat prevention**: Use `Plug.provide()` for reusable functions
+   ```javascript
+   const fun = Plug.provide('myFunction', function() { /* ... */ });
+   return `${fun}();`;
+   ```
+
+5. **Return format**: Always return a string containing JavaScript code
+   ```javascript
+   return `(function(){\n${code}\n})();`;
+   ```
+
+### Common Block Patterns
+
+**Statement Block** (executes code):
+```xml
+<template color="#8a2be2" prev="true" next="true" tooltip="Description">
+    <dummy><label>Block Name</label></dummy>
+    <statement name="DO"></statement>
+</template>
+```
+
+**Value Block** (returns value):
+```xml
+<template color="green" output="String" tooltip="Description">
+    <dummy><label>Get Value</label></dummy>
+</template>
+```
+
+## Error Prevention
+
+### Common Mistakes to Avoid
+
+1. **Block type mismatch**: Don't use full namespace (`Adam's Awesome Tools/masterBlock`) for same-plugin blocks in `init.plug`
+2. **Missing category**: Plugin won't load without `<category>` element
+3. **Missing type attribute**: All `<block>` elements must have `type` attribute
+4. **Empty inputs**: Always provide fallback for `valueToCode()` and `statementToCode()`
+5. **Checkbox values**: Compare against `'TRUE'` string, not boolean `true`
+6. **Code function errors**: Ensure `code()` function doesn't throw errors during validation
+
+### Validation Errors
+
+If you see `BlockError`:
+- Check XML syntax (matching tags, proper attributes)
+- Verify block type references match actual `.block` filenames
+- Ensure `code()` function doesn't throw errors
+- Check input/output type compatibility
+
+## Code Style
+
+### JavaScript in .block files
+
+- Use template literals for code generation: `` `code here` ``
+- Use string concatenation for complex multi-line code
+- Escape quotes properly in generated code
+- Use `Plug.provide()` for functions used multiple times
+- Use `Plug.pzlib()` to declare PzLib API methods
+
+### XML Formatting
+
+- Indent with 4 spaces
+- Use double quotes for attributes
+- Self-close empty elements: `<block type="name"></block>`
+- Comment out unused blocks: `<!-- <block type="test"></block> -->`
+
+## Block Connections
+
+- **Statement blocks**: Use `prev="true"` and/or `next="true"`
+- **Value blocks**: Use `output=""` or `output="Type"`
+- **Combinations**: `prev` + `next` OR `next` + `output` are valid
+
+## Input Types
+
+- **Value inputs** (`<value>`): Accept blocks with output connections
+- **Statement inputs** (`<statement>`): Hold groups of consecutive actions
+- **Dummy inputs** (`<dummy>`): Contain non-block UI elements (fields)
+
+## Field Types
+
+Common fields:
+- `<label>` - Non-editable text
+- `<text name="...">` - Editable text input
+- `<number name="...">` - Number input
+- `<checkbox name="...">true</checkbox>` - Checkbox (true/false)
+- `<dropdown name="...">` - Dropdown with `<option>` elements
+
+## Testing
+
+After making changes:
+1. Reload the Puzzles Editor page
+2. Check browser console for errors
+3. Verify blocks appear in toolbox
+4. Test block functionality on workspace
+
+## Reference
+
+For detailed information, see:
+- `VERGE3D_PLUGINS_REFERENCE.md` - Complete reference documentation
+- Official docs: https://www.soft8soft.com/docs/manual/en/puzzles/Plugins.html
+
+## Plugin-Specific Context
+
+This plugin is "Adam's Awesome Tools" (directory: `Adams Verge3D Tools`):
+- Contains multiple utility blocks: `masterBlock`, `shortCutsBlock`, `improvedSearch`, `minimap`, `addMenuBlock`, `grabBlock`, `mathExpression`
+- `masterBlock` is a wrapper that loads all other blocks in a statement input
+- Blocks use short type names in `init.plug` (e.g., `masterBlock`, not `Adam's Awesome Tools/masterBlock`)
