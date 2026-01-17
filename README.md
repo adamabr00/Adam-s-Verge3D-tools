@@ -2,6 +2,9 @@
 
 A collection of powerful plugins that enhance the Verge3D puzzle editor with advanced functionality, keyboard shortcuts, and improved workflow tools.
 
+The quickest way to get only the necessary files to install the plugin is to use this link. It will automatically start a download of a specific folder from the github page. Extract the zip file and place it in your Verge3D plugins folder.
+https://download-directory.github.io/?url=https%3A%2F%2Fgithub.com%2Fadamabr00%2FAdam-s-Verge3D-tools%2Ftree%2Fmain%2FAdams%2520Verge3D%2520Tools
+
 ## Features
 
 ### Math Expression Plugin - Shift+C
