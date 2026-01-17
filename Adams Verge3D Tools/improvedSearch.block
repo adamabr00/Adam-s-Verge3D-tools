@@ -17,6 +17,8 @@ function code(block) {
         let groupedResults = [], activeTabIndex = 0, currentIndexInTab = 0;
         let lastHighlightedId = null;
         let cachedBlocks = [];
+        let searchTimeout = null;
+        const DEBOUNCE_DELAY = 250; // milliseconds - wait 250ms after user stops typing
 
         // 🔹 Normalize for search
         function normalize(str) {
@@ -212,7 +214,13 @@ function code(block) {
             
             document.body.appendChild(searchOverlay);
 
-            searchInput.addEventListener('input', () => doSearch());
+            // Debounced search input - only search after user stops typing
+            searchInput.addEventListener('input', () => {
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    doSearch();
+                }, DEBOUNCE_DELAY);
+            });
             searchInput.addEventListener('keydown', e => handleKeys(e));
             searchInput.focus();
 
@@ -297,7 +305,26 @@ function code(block) {
                 searchInput.focus();
                 const ws = Blockly.getMainWorkspace();
                 const b = ws.getBlockById(r.id);
-                if (b) { ws.centerOnBlock(b.id); ws.highlightBlock(b.id); lastHighlightedId = b.id; }
+                if (!b) return;
+                
+                // Check if block is inside a collapsed parent
+                let blockToHighlight = b;
+                let parent = b.getParent && b.getParent();
+                
+                // Traverse up the parent chain to find the first collapsed parent
+                while (parent) {
+                    if (typeof parent.isCollapsed === 'function' && parent.isCollapsed()) {
+                        // Found a collapsed parent - highlight it instead
+                        blockToHighlight = parent;
+                        break;
+                    }
+                    parent = parent.getParent && parent.getParent();
+                }
+                
+                // Highlight and center on the appropriate block (parent if collapsed, otherwise the found block)
+                ws.centerOnBlock(blockToHighlight.id);
+                ws.highlightBlock(blockToHighlight.id);
+                lastHighlightedId = blockToHighlight.id;
             }, 10);
         }
 
@@ -309,6 +336,10 @@ function code(block) {
 
         function closeSearchUI() {
             if (searchOverlay) {
+                // Clear any pending search timeout
+                clearTimeout(searchTimeout);
+                searchTimeout = null;
+                
                 searchOverlay.remove(); searchOverlay = null;
                 groupedResults = [];
                 if (lastHighlightedId) { Blockly.getMainWorkspace().highlightBlock(null); lastHighlightedId = null; }
