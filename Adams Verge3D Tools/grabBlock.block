@@ -1,0 +1,246 @@
+<template color="#3b82f6" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press G to grab and drag the selected block. Click to drop, right-click to cancel and restore connections.">
+  <dummy>
+    <label>G-Drag Selected Block</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function () {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('logic')) { console.log('[G-drag] Skipped: no ?logic param.'); return; }
+  if (window.__GDragInstalled) { console.log('[G-drag] Already installed.'); return; }
+  window.__GDragInstalled = true;
+
+  // --- Shim: silence "className.indexOf is not a function" for SVG elements ---
+  try {
+    if (window.SVGAnimatedString && !SVGAnimatedString.prototype.indexOf) {
+      Object.defineProperty(SVGAnimatedString.prototype, 'indexOf', {
+        value: function (s) { return String(this.baseVal || '').indexOf(s); },
+        configurable: true
+      });
+      console.log('[G-drag] Shim installed for SVGAnimatedString.indexOf');
+    }
+  } catch (err) { console.debug('[G-drag] Shim install failed:', err); }
+
+  // -------- Connection snapshot/restore (ID + input-name aware) --------
+  const WS = () => Blockly.getMainWorkspace();
+  const KIND = { PREV:'prev', NEXT:'next', OUT:'out', INPUT:'input' };
+
+  function getConnBySel(sel) {
+    if (!sel) return null;
+    const blk = WS().getBlockById(sel.id);
+    if (!blk) return null;
+    switch (sel.kind) {
+      case KIND.PREV:  return blk.previousConnection || null;
+      case KIND.NEXT:  return blk.nextConnection || null; // chain-after connection
+      case KIND.OUT:   return blk.outputConnection || null;
+      case KIND.INPUT: {
+        const input = blk.getInput(sel.name);
+        return input && input.connection ? input.connection : null; // works for value AND statement inputs
+      }
+      default: return null;
+    }
+  }
+
+  // IMPORTANT: if a connection belongs to an INPUT (value OR statement), encode it as {kind:'input', name}
+  function makeSelFromConn(conn) {
+    if (!conn) return null;
+    const blk = conn.getSourceBlock();
+    // Check if this connection is attached to an input (value OR statement input)
+    const inp = blk.inputList && blk.inputList.find(i => i && i.connection === conn);
+    if (inp) return { id: blk.id, kind: KIND.INPUT, name: inp.name };
+    // Otherwise encode by role on the block body
+    switch (conn.type) {
+      case Blockly.ConnectionType.PREVIOUS_STATEMENT: return { id: blk.id, kind: KIND.PREV };
+      case Blockly.ConnectionType.NEXT_STATEMENT:     return { id: blk.id, kind: KIND.NEXT };
+      case Blockly.ConnectionType.OUTPUT_VALUE:       return { id: blk.id, kind: KIND.OUT  };
+      case Blockly.ConnectionType.INPUT_VALUE:        return { id: blk.id, kind: KIND.INPUT, name: (inp && inp.name) || '' };
+      default: return null;
+    }
+  }
+
+  function snapshotConnections(b) {
+    const pairs = [];
+    const pushPair = (a, tag) => {
+      const ta = a && a.targetConnection;
+      if (!ta) return;
+      const selA = makeSelFromConn(a);
+      const selB = makeSelFromConn(ta);
+      if (selA && selB) pairs.push({ a: selA, b: selB, tag });
+    };
+
+    // Moving block's own attachments
+    if (b.outputConnection)   pushPair(b.outputConnection, 'value'); // value plug
+    if (b.previousConnection) pushPair(b.previousConnection, 'prev'); // statement plug to parent input
+
+    // Children connected into inputs of the moving block
+    if (Array.isArray(b.inputList)) {
+      for (const input of b.inputList) {
+        if (input && input.connection) pushPair(input.connection, 'child-input');
+      }
+    }
+
+    // The chain that follows the moving block
+    if (b.nextConnection) pushPair(b.nextConnection, 'next');
+
+    // Restore order: parent-input reattach first
+    const order = { 'prev': 0, 'value': 1, 'child-input': 2, 'next': 3 };
+    pairs.sort((p, q) => (order[p.tag] ?? 99) - (order[q.tag] ?? 99));
+    return pairs;
+  }
+
+  // Normalize to parent→child direction; prefer isSuperior() when available
+  function parentChildOrder(aConn, bConn) {
+    const hasSupA = typeof aConn.isSuperior === 'function';
+    const hasSupB = typeof bConn.isSuperior === 'function';
+    if (hasSupA && hasSupB) {
+      const aSup = aConn.isSuperior(), bSup = bConn.isSuperior();
+      if (aSup && !bSup) return [aConn, bConn];
+      if (bSup && !aSup) return [bConn, aConn];
+    }
+    // Fallback by type: parent = INPUT_VALUE or NEXT_STATEMENT (statement input)
+    const C = Blockly.ConnectionType;
+    const isParent = c => c.type === C.INPUT_VALUE || c.type === C.NEXT_STATEMENT;
+    if (isParent(aConn) && !isParent(bConn)) return [aConn, bConn];
+    if (isParent(bConn) && !isParent(aConn)) return [bConn, aConn];
+    return [aConn, bConn];
+  }
+
+  function connectPair(aConn, bConn) {
+    if (!aConn || !bConn) return false;
+    if (aConn.isDisposed?.() || bConn.isDisposed?.()) return false;
+    if (aConn.targetConnection === bConn && bConn.targetConnection === aConn) return true;
+
+    const [parent, child] = parentChildOrder(aConn, bConn);
+
+    if (parent.isConnected() && parent.targetConnection !== child) parent.disconnect();
+    if (child.isConnected() && child.targetConnection !== parent) child.disconnect();
+
+    try { parent.connect(child); return true; }
+    catch { return false; }
+  }
+
+  function restoreConnections(snapshot) {
+    if (!snapshot) return;
+    for (const pair of snapshot) {
+      const a = getConnBySel(pair.a);
+      const b = getConnBySel(pair.b);
+      connectPair(a, b);
+    }
+  }
+
+  // ---------------- G-drag core (with overlay) ----------------
+  let dragging = false, moveProxy = null, overlay = null, suppressCtx = null;
+  let last = { x: 0, y: 0 };
+  let block = null, startPos = null, connSnap = null;
+
+  const getSelectedSvg = () => (Blockly && Blockly.selected) ? Blockly.selected.getSvgRoot() : null;
+  const getBlock = () => (Blockly ? Blockly.selected : null);
+
+  document.addEventListener('mousemove', e => { last.x = e.clientX; last.y = e.clientY; }, true);
+
+  const fire = (type, target, opts={}) => {
+    const base = { bubbles:true, cancelable:true, clientX:last.x, clientY:last.y, buttons:opts.buttons ?? 1, pointerId:1, pointerType:'mouse', isPrimary:true, view:window };
+    try { target.dispatchEvent(new PointerEvent(type, base)); }
+    catch { target.dispatchEvent(new MouseEvent(type.replace('pointer','mouse'), base)); }
+  };
+
+  const makeOverlay = () => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:transparent;cursor:default;pointer-events:auto;';
+    const swallow = ev => { ev.preventDefault(); ev.stopPropagation(); };
+    ['click','dblclick','pointerup','mouseup','mousemove','wheel','contextmenu'].forEach(t => el.addEventListener(t, swallow, true));
+    el.addEventListener('pointerdown', e => {
+      if (!dragging) return;
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation?.();
+      const cancel = (e.button === 2);
+      endDrag({ cancel });
+    }, true);
+    document.body.appendChild(el);
+    return el;
+  };
+
+  const startDrag = () => {
+    const svg = getSelectedSvg(); block = getBlock();
+    if (!svg || !block) { console.warn('[G-drag] No selected block.'); return; }
+
+    // Position + connections snapshot (input-name aware)
+    if (typeof block.getRelativeToSurfaceXY === 'function') {
+      const p = block.getRelativeToSurfaceXY(); startPos = { x: p.x, y: p.y };
+    }
+    connSnap = snapshotConnections(block);
+
+    fire('pointerdown', svg, { buttons: 1 });
+    dragging = true;
+
+    moveProxy = () => fire('pointermove', document, { buttons: 1 });
+    document.addEventListener('mousemove', moveProxy, true);
+
+    overlay = makeOverlay();
+    suppressCtx = e => { e.preventDefault(); };
+    window.addEventListener('contextmenu', suppressCtx, true);
+
+    console.log('[G-drag] Drag started. Click to drop, right-click to cancel/restore (incl. statement inputs).');
+  };
+
+  const endDrag = ({ cancel }) => {
+    if (!dragging) return;
+    dragging = false;
+
+    const b = block, start = startPos, snap = connSnap;
+
+    fire('pointerup', document, { buttons: 0 });
+
+    if (moveProxy) document.removeEventListener('mousemove', moveProxy, true);
+    moveProxy = null;
+
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    overlay = null;
+
+    if (suppressCtx) window.removeEventListener('contextmenu', suppressCtx, true);
+    suppressCtx = null;
+
+    block = null; startPos = null; connSnap = null;
+
+    if (cancel && b) {
+      const restoreAll = () => {
+        try {
+          if (start) {
+            if (typeof b.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+              b.moveTo(new Blockly.utils.Coordinate(start.x, start.y));
+            } else if (typeof b.getRelativeToSurfaceXY === 'function' && typeof b.moveBy === 'function') {
+              const cur = b.getRelativeToSurfaceXY();
+              const dx = start.x - cur.x, dy = start.y - cur.y;
+              if (dx || dy) b.moveBy(dx, dy);
+            }
+          }
+          restoreConnections(snap);
+          console.log('[G-drag] Restored to original position & connections (incl. statement inputs).');
+        } catch (e) {
+          console.debug('[G-drag] Restore failed:', e);
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(restoreAll));
+    }
+
+    setTimeout(() => console.log('[G-drag] Drag ended.'), 0);
+  };
+
+  // Start only when NOT typing in inputs / editable fields
+  document.addEventListener('keydown', e => {
+    if (e.key && e.key.toLowerCase() === 'g' && !dragging) {
+      const t = e.target;
+      const isTyping = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (isTyping) return;
+      e.preventDefault();
+      startDrag();
+    }
+  }, true);
+
+  window.addEventListener('blur', () => endDrag({ cancel: false }));
+
+  console.log('[G-drag] Ready. Select a block, press G to grab. Click to drop, right-click to cancel/restore connections.');
+})();`;
+}
+</script>

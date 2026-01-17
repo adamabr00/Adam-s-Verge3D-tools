@@ -1,0 +1,213 @@
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds a draggable minimap panel to navigate large workspaces. Shows all blocks and current viewport position.">
+    <dummy>
+        <label>Add Minimap</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `(function() {
+  let currentWorkspace = null;
+  let minimapInstance = null;
+
+  function waitForBlockly() {
+    if (window.Blockly && Blockly.getMainWorkspace()) {
+      setupWorkspaceWatcher();
+    } else {
+      setTimeout(waitForBlockly, 300);
+    }
+  }
+
+  // 🔥 Watch for workspace changes (tab switches)
+  function setupWorkspaceWatcher() {
+    const checkWorkspace = () => {
+      const ws = Blockly.getMainWorkspace();
+      if (ws && ws !== currentWorkspace) {
+        currentWorkspace = ws;
+        initProMinimap(ws);
+      }
+    };
+    setInterval(checkWorkspace, 500); // lightweight polling
+    checkWorkspace();
+  }
+
+  function injectUI() {
+    // Remove previous minimap if it exists
+    const old = document.getElementById('minimap-container');
+    if (old) old.remove();
+
+    const container = document.createElement('div');
+    container.id = "minimap-container";
+    container.style.cssText = \`
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      width: 240px;
+      height: 180px;
+      border: 1px solid #666;
+      background: #111;
+      opacity: 0.9;
+      z-index: 9999;
+      resize: both;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    \`;
+
+    // Top bar for dragging
+    const topBar = document.createElement('div');
+    topBar.style.cssText = \`
+      height: 20px;
+      background: #222;
+      color: #fff;
+      font-size: 12px;
+      line-height: 20px;
+      padding-left: 5px;
+      cursor: move;
+      flex-shrink: 0;
+    \`;
+    topBar.textContent = "🗺️ Minimap";
+    container.appendChild(topBar);
+
+    // Canvas
+    const canvas = document.createElement('canvas');
+    canvas.id = "minimap-canvas";
+    canvas.width = 240;
+    canvas.height = 160;
+    canvas.style.flex = "1";
+    container.appendChild(canvas);
+
+    // Collapse button
+    const collapseBtn = document.createElement('div');
+    collapseBtn.textContent = "▼";
+    collapseBtn.style.cssText = \`
+      position: absolute;
+      top: 2px;
+      right: 5px;
+      cursor: pointer;
+      font-size: 14px;
+    \`;
+    topBar.appendChild(collapseBtn);
+
+    // Add to DOM
+    const parent = document.querySelector('#blocklyDiv') || document.body;
+    parent.appendChild(container);
+
+    // Collapse logic
+    let collapsed = false;
+    collapseBtn.onclick = () => {
+      collapsed = !collapsed;
+      canvas.style.display = collapsed ? 'none' : 'block';
+      collapseBtn.textContent = collapsed ? "▲" : "▼";
+    };
+
+    // Dragging the panel
+    let drag = false, sx = 0, sy = 0, sl = 0, st = 0;
+    topBar.onmousedown = e => {
+      drag = true;
+      sx = e.clientX;
+      sy = e.clientY;
+      sl = container.offsetLeft;
+      st = container.offsetTop;
+    };
+    window.addEventListener('mousemove', e => {
+      if (drag) {
+        container.style.left = sl + (e.clientX - sx) + "px";
+        container.style.top = st + (e.clientY - sy) + "px";
+        container.style.right = "auto";
+        container.style.bottom = "auto";
+      }
+    });
+    window.addEventListener('mouseup', () => drag = false);
+
+    return canvas;
+  }
+
+  function initProMinimap(workspace) {
+    console.log("%c[Pro Minimap] Initializing for new workspace...", "color:yellow");
+
+    const canvas = injectUI();
+    const ctx = canvas.getContext('2d');
+
+    let draggingViewport = false;
+    let dragOffsetX = 0, dragOffsetY = 0;
+    let scale = 0.1;
+    let bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    let viewportRect = { x: 0, y: 0, w: 0, h: 0 };
+
+    function calculateBounds() {
+      const blocks = workspace.getAllBlocks(false);
+      if (blocks.length === 0) { bounds = {minX:0,minY:0,maxX:500,maxY:500}; return; }
+      let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+      blocks.forEach(b => {
+        const p=b.getRelativeToSurfaceXY(); const s=b.getHeightWidth();
+        minX=Math.min(minX,p.x); minY=Math.min(minY,p.y);
+        maxX=Math.max(maxX,p.x+s.width); maxY=Math.max(maxY,p.y+s.height);
+      });
+      bounds={minX,minY,maxX,maxY};
+      const w=maxX-minX, h=maxY-minY;
+      scale=Math.min(canvas.width/(w+200), canvas.height/(h+200));
+    }
+
+    function drawMinimap() {
+      calculateBounds();
+      const metrics = workspace.getMetrics();
+      const zoom = workspace.scale;
+
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      workspace.getAllBlocks(false).forEach(block=>{
+        const pos=block.getRelativeToSurfaceXY();
+        const size=block.getHeightWidth();
+        ctx.fillStyle=block.getColour?block.getColour():"#00ffcc";
+        ctx.globalAlpha=0.6;
+        ctx.fillRect((pos.x-bounds.minX)*scale,(pos.y-bounds.minY)*scale,size.width*scale,size.height*scale);
+      });
+
+      ctx.globalAlpha=1;
+      ctx.strokeStyle='#ff4444';
+      ctx.lineWidth=2;
+      const vx=(metrics.viewLeft-bounds.minX)*scale;
+      const vy=(metrics.viewTop-bounds.minY)*scale;
+      const vw=(metrics.viewWidth/zoom)*scale;
+      const vh=(metrics.viewHeight/zoom)*scale;
+      viewportRect={x:vx,y:vy,w:vw,h:vh};
+      ctx.strokeRect(vx,vy,vw,vh);
+    }
+
+    function moveTo(mx,my){
+      const metrics=workspace.getMetrics();
+      const zoom=workspace.scale;
+      const tx=(mx/scale)+bounds.minX-(metrics.viewWidth/(2*zoom));
+      const ty=(my/scale)+bounds.minY-(metrics.viewHeight/(2*zoom));
+      workspace.scroll(-tx,-ty);
+      drawMinimap();
+    }
+
+    canvas.addEventListener('mousedown',e=>{
+      const mx=e.offsetX,my=e.offsetY;
+      if(mx>=viewportRect.x&&mx<=viewportRect.x+viewportRect.w&&my>=viewportRect.y&&my<=viewportRect.y+viewportRect.h){
+        draggingViewport=true;
+        dragOffsetX=mx-viewportRect.x;
+        dragOffsetY=my-viewportRect.y;
+      } else moveTo(mx,my);
+    });
+    canvas.addEventListener('mousemove',e=>{
+      if(draggingViewport) moveTo(e.offsetX-dragOffsetX+viewportRect.w/2,e.offsetY-dragOffsetY+viewportRect.h/2);
+    });
+    window.addEventListener('mouseup',()=>draggingViewport=false);
+
+    let redrawPending=false;
+    workspace.addChangeListener(()=>{
+      if(!redrawPending){redrawPending=true;requestAnimationFrame(()=>{drawMinimap();redrawPending=false;});}
+    });
+
+    drawMinimap();
+    console.log("%c[Pro Minimap] ✅ Ready for workspace!", "color:lime;font-weight:bold;");
+  }
+
+  waitForBlockly();
+})();`;
+}
+</script>
