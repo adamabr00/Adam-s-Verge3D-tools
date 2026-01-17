@@ -82,6 +82,24 @@ Provides an advanced search interface for finding puzzles across all tabs in the
 
 **Usage:** Press **Shift+F** to open search (pre-fills with selected puzzle type if available). Type to search across all puzzles in all tabs, use arrow keys to navigate results, and press Enter to jump to the highlighted puzzle.
 
+---
+
+### Local View Plugin - Shift+H
+Provides a focused view mode that shows only the selected puzzle block and its connected blocks, hiding all others for visual clarity in cluttered workspaces.
+
+**Key Features:**
+- **Visual focus mode** - Shows only the selected block and all blocks connected to it (via previous, next, output, and input connections)
+- **Non-destructive** - Hiding is visual only; puzzle execution remains unaffected
+- **Tab-scoped** - Only hides blocks within the current tab
+- **Visual indicator** - Displays "Local View" indicator in the top-right corner when active
+- **Toggle functionality** - Press Shift+H again to restore all blocks
+- **Smart connection detection** - Automatically includes all blocks in statement chains, value inputs, and output connections
+- **Collapsed state preservation** - Maintains collapsed/expanded state of blocks when toggling local view
+
+**Usage:** Select any puzzle block in the workspace, then press **Shift+H** to enter local view mode. Only the selected block and its connections will be visible. Press **Shift+H** again to exit local view and show all blocks. The "Local View" indicator appears in the top-right corner when active.
+
+---
+
 ### G-Drag Puzzles Plugin
 Provides an simple block dragging interface with connection preservation and restoration.
 
