@@ -80,7 +80,7 @@ function code(block) {
             activeTabIndex = 0;
             currentIndexInTab = 0;
             renderTabsBar();
-            jumpToCurrent();
+            // Don't auto-jump - let user navigate with arrow keys or Enter
         }
 
         // 🔹 Create search UI
