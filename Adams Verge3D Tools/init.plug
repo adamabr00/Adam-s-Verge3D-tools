@@ -1,18 +1,22 @@
 <category name="Adam's Custom Tools" color="#de3900">
      <!-- Master block with pre-filled statement chain -->
-  <block type="Adam's Awesome Tools/masterBlock">
+  <block type="masterBlock">
     <statement name="DO">
-      <block type="Adam's Awesome Tools/shortCutsBlock">
+      <block type="shortCutsBlock">
         <next>
-          <block type="Adam's Awesome Tools/improvedSearch">
+          <block type="improvedSearch">
             <next>
-              <block type="Adam's Awesome Tools/minimap">
+              <block type="minimap">
                 <next>
-                  <block type="Adam's Awesome Tools/addMenuBlock">
+                  <block type="addMenuBlock">
                     <next>
-                      <block type="Adam's Awesome Tools/grabBlock">
+                      <block type="grabBlock">
                         <next>
-                          <block type="Adam's Awesome Tools/mathExpression"></block>
+                          <block type="mathExpression">
+                            <next>
+                              <block type="localView"></block>
+                            </next>
+                          </block>
                         </next>
                       </block>
                     </next>
@@ -32,6 +36,7 @@
     <block type="addMenuBlock"></block> 
     <block type="grabBlock"></block>
     <block type="mathExpression"></block>
+    <block type="localView"></block>
 
 
 </category>
@@ -4542,6 +4547,17 @@
         "Adam's Awesome Tools/addMenuBlock"
       ],
       "description": "Block of type Adam's Awesome Tools/addMenuBlock"
+    },
+    "Adam's Awesome Tools/masterBlock": {
+      "category": "Adam's Custom Tools",
+      "displayName": "Adam's Awesome Tools - Master",
+      "searchTerms": [
+        "Adam's Awesome Tools/masterBlock",
+        "master",
+        "master block",
+        "all tools"
+      ],
+      "description": "Master block that loads all Adam's Awesome Tools features at once"
     },
     "E-Commerce/paypalCreateOrder": {
       "category": "E-Commerce",

@@ -1,0 +1,402 @@
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+H to toggle local view - shows only the selected block and its connections. Press Shift+H again to show all blocks.">
+    <dummy>
+        <label>Local View (Shift+H)</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `(function() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('logic')) { 
+    console.log('[Local View] Skipped: no ?logic param.'); 
+    return; 
+  }
+  
+  if (window.__LocalViewInstalled) { 
+    console.log('[Local View] Already installed.'); 
+    return; 
+  }
+  window.__LocalViewInstalled = true;
+
+  let isLocalViewActive = false;
+  let hiddenBlocks = new Set();
+  let collapsedStates = new Map(); // Store collapsed state: blockId -> wasCollapsed
+  let indicatorElement = null;
+
+  function getCurrentWorkspace() {
+    return Blockly.getMainWorkspace();
+  }
+
+  function createIndicator() {
+    // Remove existing indicator if present
+    if (indicatorElement) {
+      indicatorElement.remove();
+    }
+
+    indicatorElement = document.createElement('div');
+    indicatorElement.id = 'local-view-indicator';
+    indicatorElement.textContent = 'Local View';
+    indicatorElement.style.cssText = \`
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: rgba(222, 57, 0, 0.9);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      font-weight: bold;
+      z-index: 10000;
+      pointer-events: none;
+      display: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    \`;
+    document.body.appendChild(indicatorElement);
+  }
+
+  function showIndicator() {
+    if (indicatorElement) {
+      indicatorElement.style.display = 'block';
+    }
+  }
+
+  function hideIndicator() {
+    if (indicatorElement) {
+      indicatorElement.style.display = 'none';
+    }
+  }
+
+  function getAllConnectedBlocks(block, visited = new Set()) {
+    if (!block || visited.has(block.id)) {
+      return visited;
+    }
+    visited.add(block.id);
+
+    // Check previous connection
+    if (block.previousConnection && block.previousConnection.targetBlock()) {
+      getAllConnectedBlocks(block.previousConnection.targetBlock(), visited);
+    }
+
+    // Check next connection
+    if (block.nextConnection && block.nextConnection.targetBlock()) {
+      getAllConnectedBlocks(block.nextConnection.targetBlock(), visited);
+    }
+
+    // Check output connection
+    if (block.outputConnection && block.outputConnection.targetBlock()) {
+      getAllConnectedBlocks(block.outputConnection.targetBlock(), visited);
+    }
+
+    // Check all input connections (value and statement)
+    block.inputList.forEach(input => {
+      if (input.connection) {
+        // Value input
+        if (input.connection.targetBlock()) {
+          getAllConnectedBlocks(input.connection.targetBlock(), visited);
+        }
+        // Statement input - check all blocks in the statement chain
+        let statementBlock = input.connection.targetBlock();
+        while (statementBlock) {
+          getAllConnectedBlocks(statementBlock, visited);
+          if (statementBlock.nextConnection && statementBlock.nextConnection.targetBlock()) {
+            statementBlock = statementBlock.nextConnection.targetBlock();
+          } else {
+            break;
+          }
+        }
+      }
+    });
+
+    return visited;
+  }
+
+  function getSelectedBlock() {
+    // In Blockly 8.0.1, use Blockly.selected to get the currently selected block
+    if (Blockly && Blockly.selected) {
+      return Blockly.selected;
+    }
+    return null;
+  }
+
+  function enableLocalView() {
+    const workspace = getCurrentWorkspace();
+    if (!workspace) return;
+
+    const selectedBlock = getSelectedBlock();
+    if (!selectedBlock) {
+      console.log('[Local View] No block selected.');
+      return;
+    }
+
+    // Get all blocks that should be visible (selected + connected)
+    const visibleBlockIds = getAllConnectedBlocks(selectedBlock, new Set());
+    
+    // Get all blocks in the workspace
+    const allBlocks = workspace.getAllBlocks(false);
+    
+    // Hide blocks that aren't in the visible set
+    hiddenBlocks.clear();
+    collapsedStates.clear(); // Clear previous collapsed states
+    
+    allBlocks.forEach(block => {
+      if (!visibleBlockIds.has(block.id)) {
+        // Store collapsed state before hiding
+        try {
+          if (typeof block.isCollapsed === 'function') {
+            const wasCollapsed = block.isCollapsed();
+            collapsedStates.set(block.id, wasCollapsed);
+          }
+        } catch (e) {
+          // Block might not support isCollapsed, ignore
+        }
+        
+        // Hide the block visually using direct SVG manipulation (like blockCulling)
+        setBlockDisplay(block, false);
+        hiddenBlocks.add(block.id);
+      }
+    });
+
+    isLocalViewActive = true;
+    showIndicator();
+    console.log('[Local View] Enabled. Showing', visibleBlockIds.size, 'blocks.');
+  }
+
+  function getParentBlock(block) {
+    // Check if block is connected to a parent via previous connection
+    if (block.previousConnection && block.previousConnection.targetBlock()) {
+      return block.previousConnection.targetBlock();
+    }
+    // Check if block is connected to a parent via output connection
+    if (block.outputConnection && block.outputConnection.targetBlock()) {
+      return block.outputConnection.targetBlock();
+    }
+    // Check if block is connected to a parent via input connection
+    if (block.getParent) {
+      return block.getParent();
+    }
+    return null;
+  }
+
+  function getAllDescendantBlocks(block, descendants = new Set()) {
+    if (!block || descendants.has(block.id)) {
+      return descendants;
+    }
+    // Don't add the block itself - we only want its children
+    // descendants.add(block.id);
+
+    // Get children from all connections
+    // Next connection (sibling chain - these are children in the chain)
+    if (block.nextConnection && block.nextConnection.targetBlock()) {
+      let nextBlock = block.nextConnection.targetBlock();
+      while (nextBlock) {
+        if (!descendants.has(nextBlock.id)) {
+          descendants.add(nextBlock.id);
+          getAllDescendantBlocks(nextBlock, descendants);
+        }
+        nextBlock = nextBlock.nextConnection && nextBlock.nextConnection.targetBlock();
+      }
+    }
+
+    // Output connection (value child - block plugged into this block's output)
+    if (block.outputConnection && block.outputConnection.targetBlock()) {
+      let childBlock = block.outputConnection.targetBlock();
+      if (!descendants.has(childBlock.id)) {
+        descendants.add(childBlock.id);
+        getAllDescendantBlocks(childBlock, descendants);
+      }
+    }
+
+    // Input connections (value and statement children - blocks plugged into inputs)
+    if (block.inputList) {
+      block.inputList.forEach(input => {
+        if (input.connection && input.connection.targetBlock()) {
+          let childBlock = input.connection.targetBlock();
+          // For statement inputs, traverse the entire chain
+          while (childBlock) {
+            if (!descendants.has(childBlock.id)) {
+              descendants.add(childBlock.id);
+              getAllDescendantBlocks(childBlock, descendants);
+            }
+            if (childBlock.nextConnection && childBlock.nextConnection.targetBlock()) {
+              childBlock = childBlock.nextConnection.targetBlock();
+            } else {
+              break;
+            }
+          }
+        }
+      });
+    }
+
+    return descendants;
+  }
+
+  function shouldBlockBeVisible(block) {
+    // Top-level blocks (no parent) should be visible
+    const parent = block.getParent();
+    if (!parent) {
+      return true;
+    }
+    
+    // Check if the parent input that connects to this block is visible
+    // This respects Blockly's collapsed state mechanism
+    const parentInput = parent.getInputWithBlock(block);
+    if (parentInput) {
+      return parentInput.isVisible();
+    }
+    
+    // If block is connected via previous/next (statement chain), check parent's collapsed state
+    // Statement chains are part of the parent block, so if parent is collapsed, children should be hidden
+    if (block.previousConnection && block.previousConnection.targetBlock() === parent) {
+      // This block is connected to parent via previous connection
+      // Check if parent is collapsed
+      if (typeof parent.isCollapsed === 'function' && parent.isCollapsed()) {
+        return false;
+      }
+    }
+    
+    // Default to visible if we can't determine
+    return true;
+  }
+
+  function setBlockDisplay(block, visible) {
+    // Use the same approach as blockCulling: direct SVG manipulation via getSvgRoot()
+    // This matches how Blockly's input.setVisible() works internally
+    try {
+      const el = block.getSvgRoot && block.getSvgRoot();
+      if (el) {
+        // Check parent input visibility if we're trying to show the block
+        if (visible && !shouldBlockBeVisible(block)) {
+          // Parent input is hidden (collapsed parent), so keep block hidden
+          el.style.display = 'none';
+          return;
+        }
+        el.style.display = visible ? '' : 'none';
+      }
+    } catch (e) {
+      console.warn('[Local View] Failed to set block display:', block.id, e);
+    }
+  }
+
+  function disableLocalView() {
+    const workspace = getCurrentWorkspace();
+    if (!workspace) return;
+
+    // Step 1: Restore collapsed states FIRST (before showing blocks)
+    // This ensures Blockly's internal state is correct and triggers updateCollapsed_()
+    const collapsedBlockIds = new Set();
+    hiddenBlocks.forEach(blockId => {
+      const block = workspace.getBlockById(blockId);
+      if (block && collapsedStates.has(blockId)) {
+        try {
+          const wasCollapsed = collapsedStates.get(blockId);
+          if (wasCollapsed && typeof block.setCollapsed === 'function') {
+            // Restore collapsed state - this will trigger updateCollapsed_() which sets input visibility
+            if (block.isCollapsed() !== wasCollapsed) {
+              block.setCollapsed(wasCollapsed);
+              collapsedBlockIds.add(blockId);
+            }
+          }
+        } catch (e) {
+          console.warn('[Local View] Failed to restore collapsed state:', blockId, e);
+        }
+      }
+    });
+
+    // Step 2: Render collapsed blocks to ensure updateCollapsed_() is called
+    // This properly sets input visibility, which controls child block visibility
+    collapsedBlockIds.forEach(blockId => {
+      const block = workspace.getBlockById(blockId);
+      if (block && block.rendered && typeof block.render === 'function') {
+        try {
+          // Render will call updateCollapsed_() which sets input visibility
+          block.render();
+        } catch (e) {
+          console.warn('[Local View] Failed to render collapsed block:', blockId, e);
+        }
+      }
+    });
+
+    // Step 3: Show all blocks using direct SVG manipulation
+    // setBlockDisplay() will check parent input visibility and respect collapsed state
+    hiddenBlocks.forEach(blockId => {
+      const block = workspace.getBlockById(blockId);
+      if (block) {
+        setBlockDisplay(block, true);
+      }
+    });
+
+    // Step 4: Force workspace to update/render to ensure all visibility changes are processed
+    if (typeof workspace.render === 'function') {
+      workspace.render();
+    }
+    
+    collapsedStates.clear(); // Clear after restoring
+    hiddenBlocks.clear();
+    isLocalViewActive = false;
+    hideIndicator();
+    console.log('[Local View] Disabled. Showing all blocks.');
+  }
+
+  function toggleLocalView() {
+    if (isLocalViewActive) {
+      disableLocalView();
+    } else {
+      enableLocalView();
+    }
+  }
+
+  function handleKeyPress(event) {
+    // Check if Shift+H is pressed
+    // Don't trigger if user is typing in an input field
+    if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable) {
+      return;
+    }
+
+    // Check for Shift+H (keyCode 72 is H, or key === 'H'/'h' with shiftKey)
+    if (event.shiftKey && (event.key === 'H' || event.key === 'h' || event.keyCode === 72)) {
+      // Prevent default behavior
+      event.preventDefault();
+      event.stopPropagation();
+      
+      toggleLocalView();
+    }
+  }
+
+  // Initialize
+  function init() {
+    createIndicator();
+    
+    // Wait for Blockly to be ready
+    function waitForBlockly() {
+      if (window.Blockly && getCurrentWorkspace()) {
+        // Add keyboard listener
+        document.addEventListener('keydown', handleKeyPress, true);
+        console.log('[Local View] Initialized. Press Shift+H to toggle local view.');
+      } else {
+        setTimeout(waitForBlockly, 100);
+      }
+    }
+    
+    waitForBlockly();
+  }
+
+  // Cleanup function (called when block is removed)
+  function cleanup() {
+    document.removeEventListener('keydown', handleKeyPress, true);
+    if (indicatorElement) {
+      indicatorElement.remove();
+      indicatorElement = null;
+    }
+    disableLocalView();
+    window.__LocalViewInstalled = false;
+  }
+
+  // Store cleanup function globally so it can be called on reload
+  window.__LocalViewCleanup = cleanup;
+
+  init();
+})();`;
+}
+</script>
