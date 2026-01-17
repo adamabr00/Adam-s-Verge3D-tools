@@ -13,7 +13,7 @@ function code(block) {
             return;
         }
 
-        let searchOverlay = null, searchInput, statusLabel, tabsBar;
+        let searchOverlay = null, searchInput, statusLabel, tabsBar, hintsLabel;
         let groupedResults = [], activeTabIndex = 0, currentIndexInTab = 0;
         let lastHighlightedId = null;
         let cachedBlocks = [];
@@ -167,8 +167,55 @@ function code(block) {
             Object.assign(statusLabel.style, {
                 fontSize: '13px',
                 color: '#94a3b8',
-                marginBottom: '0px'
+                marginBottom: '8px'
             });
+
+            // Create keyboard hints label
+            hintsLabel = document.createElement('div');
+            Object.assign(hintsLabel.style, {
+                fontSize: '12px',
+                color: '#64748b',
+                marginTop: '8px',
+                paddingTop: '8px',
+                borderTop: '1px solid #ffffff1a',
+                display: 'flex',
+                gap: '12px',
+                flexWrap: 'wrap',
+                alignItems: 'center'
+            });
+            
+            // Create hint items
+            const createHintItem = (keys, description) => {
+                const item = document.createElement('div');
+                item.style.display = 'flex';
+                item.style.alignItems = 'center';
+                item.style.gap = '6px';
+                
+                const keysEl = document.createElement('div');
+                keysEl.textContent = keys;
+                Object.assign(keysEl.style, {
+                    fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                    fontSize: '11px',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#cbd5e1'
+                });
+                
+                const descEl = document.createElement('span');
+                descEl.textContent = description;
+                descEl.style.color = '#94a3b8';
+                
+                item.appendChild(keysEl);
+                item.appendChild(descEl);
+                return item;
+            };
+            
+            hintsLabel.appendChild(createHintItem('↑↓', 'Navigate results'));
+            hintsLabel.appendChild(createHintItem('←→', 'Switch tabs'));
+            hintsLabel.appendChild(createHintItem('Enter', 'Jump to block'));
+            hintsLabel.appendChild(createHintItem('Esc', 'Close'));
 
             // Create close button as X in upper right corner
             const closeBtn = document.createElement('button');
@@ -211,6 +258,7 @@ function code(block) {
             searchOverlay.appendChild(fieldContainer);
             searchOverlay.appendChild(tabsBar);
             searchOverlay.appendChild(statusLabel);
+            searchOverlay.appendChild(hintsLabel);
             
             document.body.appendChild(searchOverlay);
 
