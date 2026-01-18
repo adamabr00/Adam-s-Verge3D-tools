@@ -1,5 +1,5 @@
 # Blockly block selection handling
-_Exported on 1/17/2026 at 23:00:04 PST from Cursor (2.3.41)_
+_Exported on 1/17/2026 at 23:06:49 PST from Cursor (2.3.41)_
 
 ---
 
@@ -1000,4 +1000,57 @@ The key changes:
 - Movement: Events disabled during drag, then grouped `BlockMove` events fired on drop
 
 Try it: delete or move multiple blocks, then press Ctrl+Z (or your undo shortcut) — all blocks should be restored together.
+
+---
+
+**User**
+
+How about doing a box selection? If I press CTRL+b I want to go into box select mode. 
+
+---
+
+**Cursor**
+
+
+Adding box selection mode: pressing Ctrl+B enters a mode where dragging selects all blocks within the rectangle.
+
+
+
+Adding box selection mode. Checking how blocks expose their bounding rectangles:
+
+
+
+Adding box selection mode:
+
+
+
+Updating the tooltip to include box selection:
+
+
+
+Fixing the Rect constructor call to match Blockly's API:
+
+
+
+Added box selection mode. Here's what it does:
+
+1. **Ctrl+B toggles box selection mode** — Press Ctrl+B to enter/exit
+2. **Visual feedback** — Crosshair cursor and a dashed blue selection rectangle
+3. **Drag to select** — Click and drag to draw a selection box
+4. **Intersection detection** — Selects all blocks that intersect with the box
+5. **Additive selection** — Hold Ctrl while dragging to add to existing selection; otherwise replaces it
+
+The implementation:
+- Creates an SVG rectangle overlay for visual feedback
+- Converts screen coordinates to workspace coordinates
+- Uses `getBoundingRectangle()` and `Rect.intersects()` to find intersecting blocks
+- Integrates with the existing multi-selection system
+
+Try it:
+1. Press **Ctrl+B** to enter box selection mode (cursor changes to crosshair)
+2. Click and drag to draw a selection box
+3. Release to select all blocks in the box
+4. Press **Ctrl+B** again to exit box selection mode
+
+The selection box appears as a dashed blue rectangle, and all intersecting blocks are added to your multi-selection.
 
