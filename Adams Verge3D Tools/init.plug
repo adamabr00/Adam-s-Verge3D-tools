@@ -14,7 +14,11 @@
                         <next>
                           <block type="mathExpression">
                             <next>
-                              <block type="localView"></block>
+                              <block type="localView">
+                                <next>
+                                  <block type="multiSelect"></block>
+                                </next>
+                              </block>
                             </next>
                           </block>
                         </next>
@@ -37,6 +41,7 @@
     <block type="grabBlock"></block>
     <block type="mathExpression"></block>
     <block type="localView"></block>
+    <block type="multiSelect"></block>
 
 
 </category>
@@ -4558,6 +4563,18 @@
         "all tools"
       ],
       "description": "Master block that loads all Adam's Awesome Tools features at once"
+    },
+    "Adam's Awesome Tools/multiSelect": {
+      "category": "Adam's Custom Tools",
+      "displayName": "Adam's Awesome Tools/multiSelect",
+      "searchTerms": [
+        "Adam's Awesome Tools/multiSelect",
+        "multi-select",
+        "multi selection",
+        "select multiple",
+        "ctrl click"
+      ],
+      "description": "Enable multi-selection: Ctrl+Click (Cmd+Click on Mac) to select multiple blocks. Press X to delete all selected blocks."
     },
     "E-Commerce/paypalCreateOrder": {
       "category": "E-Commerce",

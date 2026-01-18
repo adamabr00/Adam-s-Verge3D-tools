@@ -1,0 +1,763 @@
+<template color="#de3900" prev="true" next="true" 
+  tooltip="Enable multi-selection: Ctrl+Click to select multiple blocks, Ctrl+B for box selection, G to drag multiple blocks, X to delete all selected blocks.">
+  <dummy><label>Enable Multi-Selection</label></dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function() {
+  // ✅ Check if URL contains 'logic' parameter
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('logic')) {
+    return;
+  }
+
+  if (window.__multiSelectEnabled) {
+    console.log('[Multi-Select] Already enabled');
+    return;
+  }
+  window.__multiSelectEnabled = true;
+  
+  // Store modifier keys globally so select() can access them
+  window.__lastModifierKeys = { ctrl: false, meta: false };
+  
+  // Intercept Gesture.doStart to capture modifier keys before select() is called
+  const originalDoStart = Blockly.Gesture.prototype.doStart;
+  Blockly.Gesture.prototype.doStart = function(e) {
+    // Capture modifier keys BEFORE select() is called
+    window.__lastModifierKeys = {
+      ctrl: e.ctrlKey || false,
+      meta: e.metaKey || false,
+      shift: e.shiftKey || false
+    };
+    
+    // Call original
+    return originalDoStart.call(this, e);
+  };
+  
+  // Maintain array of selected blocks
+  window.__multiSelectedBlocks = [];
+  
+  // Override BlockSvg.select() to handle multi-selection
+  const originalSelect = Blockly.BlockSvg.prototype.select;
+  Blockly.BlockSvg.prototype.select = function() {
+    // Skip shadow blocks (same as original)
+    if (this.isShadow() && this.getParent()) {
+      this.getParent().select();
+      return;
+    }
+    
+    const modifiers = window.__lastModifierKeys || {};
+    const isMultiSelect = modifiers.ctrl || modifiers.meta;
+    
+    if (isMultiSelect && window.__multiSelectEnabled) {
+      // Multi-select mode: toggle block in selection array
+      const index = window.__multiSelectedBlocks.indexOf(this);
+      
+      if (index > -1) {
+        // Block already selected - deselect it
+        window.__multiSelectedBlocks.splice(index, 1);
+        this.removeSelect();
+        Blockly.common.setSelected(
+          window.__multiSelectedBlocks.length > 0 
+            ? window.__multiSelectedBlocks[window.__multiSelectedBlocks.length - 1]
+            : null
+        );
+      } else {
+        // Add to selection
+        window.__multiSelectedBlocks.push(this);
+        this.addSelect();
+        Blockly.common.setSelected(this);
+      }
+      
+      // Fire event for compatibility
+      const event = new Blockly.Events.Selected(null, this.id, this.workspace.id);
+      Blockly.Events.fire(event);
+      
+    } else {
+      // Normal single selection: clear multi-selection and select single block
+      window.__multiSelectedBlocks.forEach(block => {
+        if (block.removeSelect) block.removeSelect();
+      });
+      window.__multiSelectedBlocks = [this];
+      originalSelect.call(this);
+    }
+  };
+  
+  // Clear selection on workspace click
+  const originalDoWorkspaceClick = Blockly.Gesture.prototype.doWorkspaceClick_;
+  Blockly.Gesture.prototype.doWorkspaceClick_ = function(e) {
+    window.__multiSelectedBlocks.forEach(block => {
+      if (block.removeSelect) block.removeSelect();
+    });
+    window.__multiSelectedBlocks = [];
+    return originalDoWorkspaceClick.call(this, e);
+  };
+  
+  // Modify delete shortcut to handle multiple blocks
+  const registry = Blockly.ShortcutRegistry.registry;
+  
+  const deleteShortcut = registry.registry_['delete'];
+  if (deleteShortcut) {
+    const originalDeleteCallback = deleteShortcut.callback;
+    const originalDeletePrecondition = deleteShortcut.preconditionFn;
+    
+    deleteShortcut.preconditionFn = function(workspace) {
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        return !workspace.options.readOnly && multi.some(b => b && b.isDeletable());
+      }
+      if (originalDeletePrecondition) {
+        return originalDeletePrecondition.call(this, workspace);
+      }
+      return false;
+    };
+    
+    deleteShortcut.callback = function(workspace, e) {
+      const multi = window.__multiSelectedBlocks || [];
+      
+      if (multi.length > 1) {
+        e.preventDefault();
+        
+        const blocksToDelete = multi.filter(block => 
+          block && block.workspace && block.isDeletable() && !block.disposed
+        );
+        
+        if (blocksToDelete.length === 0) {
+          window.__multiSelectedBlocks = [];
+          return false;
+        }
+        
+        window.__multiSelectedBlocks = [];
+        
+        // Set up comprehensive error suppression for procedure cleanup errors
+        const originalConsoleError = console.error;
+        const originalWindowError = window.onerror;
+        
+        const shouldSuppressError = function(msg) {
+          if (!msg) return false;
+          const message = String(msg);
+          return (message.includes('toLowerCase') || message.includes('Names.equals')) && 
+                 message.includes('null');
+        };
+        
+        // Override console.error
+        console.error = function(...args) {
+          const fullError = args.join(' ');
+          if (shouldSuppressError(fullError)) {
+            return; // Suppress this specific error
+          }
+          originalConsoleError.apply(console, args);
+        };
+        
+        // Override window.onerror to catch uncaught exceptions
+        window.onerror = function(message, source, lineno, colno, error) {
+          if (shouldSuppressError(message)) {
+            return true; // Suppress this error
+          }
+          if (originalWindowError) {
+            return originalWindowError.call(window, message, source, lineno, colno, error);
+          }
+          return false;
+        };
+        
+        // Group all deletion events together for undo
+        const wasGrouped = Blockly.Events.getGroup();
+        const eventsWereEnabled = Blockly.Events.isEnabled();
+        Blockly.Events.setGroup(true);
+        if (!eventsWereEnabled) {
+          Blockly.Events.enable();
+        }
+        
+        try {
+          // Use checkAndDelete() for proper individual block deletion
+          // All deletions will be grouped together for undo
+          blocksToDelete.forEach((block) => {
+            if (block && block.workspace && !block.disposed && block.isDeletable()) {
+              try {
+                if (typeof block.checkAndDelete === 'function') {
+                  block.checkAndDelete();
+                } else if (typeof block.dispose === 'function') {
+                  block.dispose(false);
+                }
+              } catch (err) {
+                // Suppress the Names.equals error, log others
+                const errMsg = String(err.message || err || '');
+                if (!shouldSuppressError(errMsg)) {
+                  console.warn('[Multi-Select] Error deleting block:', err);
+                }
+              }
+            }
+          });
+        } finally {
+          Blockly.Events.setGroup(wasGrouped);
+          if (!eventsWereEnabled) {
+            Blockly.Events.disable();
+          }
+          // Restore error handlers immediately
+          // Note: Some errors may still appear in console but don't affect functionality
+          console.error = originalConsoleError;
+          window.onerror = originalWindowError;
+        }
+        
+        return true;
+      } else {
+        if (originalDeleteCallback) {
+          return originalDeleteCallback.call(this, workspace, e);
+        }
+        return false;
+      }
+    };
+  }
+  
+  // ============================================
+  // STEP 6: Add G-drag support for multiple blocks
+  // ============================================
+  // Track last mouse position globally for G-drag
+  let lastMousePos = { x: 0, y: 0 };
+  document.addEventListener('mousemove', e => { 
+    lastMousePos.x = e.clientX; 
+    lastMousePos.y = e.clientY; 
+  }, true);
+  
+  let multiDragState = {
+    dragging: false,
+    blocks: [],
+    startPositions: [],
+    startMousePos: null,
+    overlay: null,
+    moveHandler: null,
+    suppressCtx: null,
+    eventsWereEnabled: false
+  };
+  
+  const makeMultiDragOverlay = () => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:transparent;cursor:move;pointer-events:auto;';
+    const swallow = ev => { ev.preventDefault(); ev.stopPropagation(); };
+    ['click', 'dblclick', 'pointerup', 'mouseup', 'mousemove', 'wheel', 'contextmenu'].forEach(t => 
+      el.addEventListener(t, swallow, true)
+    );
+    const handlePointerDown = (e) => {
+      if (!multiDragState.dragging) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation?.();
+      const cancel = (e.button === 2 || e.which === 3);
+      endMultiDrag({ cancel });
+    };
+    
+    el.addEventListener('pointerdown', handlePointerDown, true);
+    el.addEventListener('mousedown', handlePointerDown, true);
+    document.body.appendChild(el);
+    return el;
+  };
+  
+  const startMultiDrag = (e) => {
+    const multi = window.__multiSelectedBlocks || [];
+    if (multi.length < 2) {
+      // Let grabBlock handle single block drag
+      return;
+    }
+    
+    // Filter valid movable blocks
+    const blocksToDrag = multi.filter(b => 
+      b && b.workspace && !b.disposed && b.isMovable && b.isMovable()
+    );
+    
+    if (blocksToDrag.length < 2) {
+      return; // Let grabBlock handle single block
+    }
+    
+    multiDragState.blocks = blocksToDrag;
+    multiDragState.startPositions = blocksToDrag.map(block => {
+      if (typeof block.getRelativeToSurfaceXY === 'function') {
+        const pos = block.getRelativeToSurfaceXY();
+        return { x: pos.x, y: pos.y };
+      }
+      return null;
+    });
+    
+    // Get workspace to convert screen coordinates
+    const workspace = blocksToDrag[0].workspace;
+    if (!workspace) return;
+    
+    // Use current mouse position (from lastMousePos) or event coordinates
+    const mouseX = e ? e.clientX : lastMousePos.x;
+    const mouseY = e ? e.clientY : lastMousePos.y;
+    
+    // Store starting mouse position in workspace coordinates
+    const svg = workspace.getParentSvg();
+    const ctm = svg.getScreenCTM();
+    if (ctm) {
+      const pt = svg.createSVGPoint();
+      pt.x = mouseX;
+      pt.y = mouseY;
+      const svgPt = pt.matrixTransform(ctm.inverse());
+      const origin = workspace.getOriginOffsetInPixels();
+      multiDragState.startMousePos = {
+        x: (svgPt.x - origin.x) / workspace.scale,
+        y: (svgPt.y - origin.y) / workspace.scale
+      };
+    } else {
+      multiDragState.startMousePos = { x: mouseX, y: mouseY };
+    }
+    
+    multiDragState.dragging = true;
+    
+    // Disable events during drag to avoid firing hundreds of move events
+    const eventsWereEnabled = Blockly.Events.isEnabled();
+    if (eventsWereEnabled) {
+      Blockly.Events.disable();
+    }
+    
+    // Handle mouse movement
+    multiDragState.moveHandler = (moveEvent) => {
+      if (!multiDragState.dragging) return;
+      
+      const workspace = multiDragState.blocks[0].workspace;
+      const svg = workspace.getParentSvg();
+      const ctm = svg.getScreenCTM();
+      
+      let currentMousePos;
+      if (ctm) {
+        const pt = svg.createSVGPoint();
+        pt.x = moveEvent.clientX;
+        pt.y = moveEvent.clientY;
+        const svgPt = pt.matrixTransform(ctm.inverse());
+        const origin = workspace.getOriginOffsetInPixels();
+        currentMousePos = {
+          x: (svgPt.x - origin.x) / workspace.scale,
+          y: (svgPt.y - origin.y) / workspace.scale
+        };
+      } else {
+        currentMousePos = { x: moveEvent.clientX, y: moveEvent.clientY };
+      }
+      
+      const deltaX = currentMousePos.x - multiDragState.startMousePos.x;
+      const deltaY = currentMousePos.y - multiDragState.startMousePos.y;
+      
+      // Move all blocks by the same delta (events disabled during drag)
+      multiDragState.blocks.forEach((block, i) => {
+        if (!block || !block.workspace || block.disposed) return;
+        const startPos = multiDragState.startPositions[i];
+        if (!startPos) return;
+        
+        const newX = startPos.x + deltaX;
+        const newY = startPos.y + deltaY;
+        
+        if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+          block.moveTo(new Blockly.utils.Coordinate(newX, newY));
+        } else if (typeof block.moveBy === 'function') {
+          const cur = block.getRelativeToSurfaceXY();
+          block.moveBy(newX - cur.x, newY - cur.y);
+        }
+      });
+    };
+    
+    // Store events enabled state for restoration
+    multiDragState.eventsWereEnabled = eventsWereEnabled;
+    
+    document.addEventListener('mousemove', multiDragState.moveHandler, true);
+    
+    multiDragState.overlay = makeMultiDragOverlay();
+    multiDragState.suppressCtx = e => { e.preventDefault(); };
+    window.addEventListener('contextmenu', multiDragState.suppressCtx, true);
+    
+    console.log(\`[Multi-Select] Dragging \${blocksToDrag.length} blocks. Click to drop, right-click to cancel.\`);
+  };
+  
+  const endMultiDrag = ({ cancel }) => {
+    if (!multiDragState.dragging) return;
+    multiDragState.dragging = false;
+    
+    const blocks = multiDragState.blocks.slice(); // Copy arrays
+    const startPositions = multiDragState.startPositions.slice();
+    
+    if (multiDragState.moveHandler) {
+      document.removeEventListener('mousemove', multiDragState.moveHandler, true);
+      multiDragState.moveHandler = null;
+    }
+    
+    if (multiDragState.overlay && multiDragState.overlay.parentNode) {
+      multiDragState.overlay.parentNode.removeChild(multiDragState.overlay);
+      multiDragState.overlay = null;
+    }
+    
+    if (multiDragState.suppressCtx) {
+      window.removeEventListener('contextmenu', multiDragState.suppressCtx, true);
+      multiDragState.suppressCtx = null;
+    }
+    
+    // Clear state before restore to prevent interference
+    multiDragState.blocks = [];
+    multiDragState.startPositions = [];
+    multiDragState.startMousePos = null;
+    
+    // Re-enable events if they were enabled before drag
+    if (multiDragState.eventsWereEnabled) {
+      Blockly.Events.enable();
+    }
+    
+    if (cancel && blocks.length > 0 && startPositions.length > 0) {
+      // Restore original positions (no events needed for cancel)
+      const restoreAll = () => {
+        try {
+          blocks.forEach((block, i) => {
+            const startPos = startPositions[i];
+            if (!startPos || !block || !block.workspace || block.disposed) return;
+            
+            if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+              block.moveTo(new Blockly.utils.Coordinate(startPos.x, startPos.y));
+            } else if (typeof block.getRelativeToSurfaceXY === 'function' && typeof block.moveBy === 'function') {
+              const cur = block.getRelativeToSurfaceXY();
+              const dx = startPos.x - cur.x;
+              const dy = startPos.y - cur.y;
+              if (dx || dy) block.moveBy(dx, dy);
+            }
+          });
+          console.log('[Multi-Select] Restored blocks to original positions.');
+        } catch (e) {
+          console.debug('[Multi-Select] Restore failed:', e);
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(restoreAll));
+    } else if (!cancel && blocks.length > 0) {
+      // Fire move events for undo support (grouped together)
+      const wasGrouped = Blockly.Events.getGroup();
+      Blockly.Events.setGroup(true);
+      
+      try {
+        blocks.forEach((block, i) => {
+          if (!block || !block.workspace || block.disposed) return;
+          
+          const startPos = startPositions[i];
+          if (!startPos) return;
+          
+          const currentPos = block.getRelativeToSurfaceXY();
+          
+          // Only fire event if block actually moved
+          if (Math.abs(currentPos.x - startPos.x) > 0.1 || Math.abs(currentPos.y - startPos.y) > 0.1) {
+            // Create and fire BlockMove event
+            if (Blockly.Events.BlockMove) {
+              const moveEvent = new Blockly.Events.BlockMove(block);
+              moveEvent.newCoordinate = new Blockly.utils.Coordinate(currentPos.x, currentPos.y);
+              moveEvent.oldCoordinate = new Blockly.utils.Coordinate(startPos.x, startPos.y);
+              Blockly.Events.fire(moveEvent);
+            }
+          }
+        });
+      } finally {
+        Blockly.Events.setGroup(wasGrouped);
+      }
+    }
+    
+    // Clear events enabled state
+    multiDragState.eventsWereEnabled = false;
+  };
+  
+  // Register G key for multi-drag (must run before grabBlock)
+  // Use capture phase and check early to intercept multi-selection drags
+  document.addEventListener('keydown', e => {
+    if (e.key && e.key.toLowerCase() === 'g' && !multiDragState.dragging) {
+      const t = e.target;
+      const isTyping = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (isTyping) return;
+      
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        // Create a synthetic event with current mouse position
+        const syntheticEvent = {
+          clientX: lastMousePos.x,
+          clientY: lastMousePos.y
+        };
+        startMultiDrag(syntheticEvent);
+        return false;
+      }
+      // If only one block, let grabBlock handle it
+    }
+  }, true);
+  
+  window.addEventListener('blur', () => endMultiDrag({ cancel: false }));
+  
+  // ============================================
+  // STEP 7: Box selection mode (Ctrl+B)
+  // ============================================
+  let boxSelectState = {
+    active: false,
+    startPos: null,
+    currentPos: null,
+    overlay: null,
+    rectElement: null,
+    workspace: null,
+    downHandler: null,
+    moveHandler: null,
+    upHandler: null
+  };
+  
+  const createBoxSelectOverlay = (workspace) => {
+    const svg = workspace.getParentSvg();
+    if (!svg) return null;
+    
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('fill', 'rgba(66, 133, 244, 0.1)');
+    rect.setAttribute('stroke', '#4285f4');
+    rect.setAttribute('stroke-width', '2');
+    rect.setAttribute('stroke-dasharray', '5,5');
+    rect.style.pointerEvents = 'none';
+    rect.style.display = 'none';
+    
+    // Add to workspace SVG
+    const svgGroup = svg.querySelector('.blocklyBlockCanvas') || svg;
+    svgGroup.appendChild(rect);
+    
+    return rect;
+  };
+  
+  const updateBoxSelectRect = () => {
+    if (!boxSelectState.rectElement || !boxSelectState.startPos || !boxSelectState.currentPos) {
+      return;
+    }
+    
+    const start = boxSelectState.startPos;
+    const current = boxSelectState.currentPos;
+    
+    const x = Math.min(start.x, current.x);
+    const y = Math.min(start.y, current.y);
+    const width = Math.abs(current.x - start.x);
+    const height = Math.abs(current.y - start.y);
+    
+    boxSelectState.rectElement.setAttribute('x', x);
+    boxSelectState.rectElement.setAttribute('y', y);
+    boxSelectState.rectElement.setAttribute('width', width);
+    boxSelectState.rectElement.setAttribute('height', height);
+    boxSelectState.rectElement.style.display = width > 0 && height > 0 ? 'block' : 'none';
+  };
+  
+  const screenToWorkspaceCoords = (workspace, clientX, clientY) => {
+    const svg = workspace.getParentSvg();
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: clientX, y: clientY };
+    
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const svgPt = pt.matrixTransform(ctm.inverse());
+    const origin = workspace.getOriginOffsetInPixels();
+    
+    return {
+      x: (svgPt.x - origin.x) / workspace.scale,
+      y: (svgPt.y - origin.y) / workspace.scale
+    };
+  };
+  
+  const startBoxSelect = (e, workspace) => {
+    if (!boxSelectState.active || !workspace) return;
+    
+    const coords = screenToWorkspaceCoords(workspace, e.clientX, e.clientY);
+    boxSelectState.startPos = coords;
+    boxSelectState.currentPos = coords;
+    
+    if (!boxSelectState.rectElement) {
+      boxSelectState.rectElement = createBoxSelectOverlay(workspace);
+    }
+    
+    if (boxSelectState.rectElement) {
+      boxSelectState.rectElement.style.display = 'block';
+      updateBoxSelectRect();
+    }
+    
+    // Prevent default to avoid selecting text or other elements
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  
+  const updateBoxSelect = (e, workspace) => {
+    if (!boxSelectState.active || !boxSelectState.startPos || !workspace) return;
+    
+    const coords = screenToWorkspaceCoords(workspace, e.clientX, e.clientY);
+    boxSelectState.currentPos = coords;
+    updateBoxSelectRect();
+  };
+  
+  const endBoxSelect = (e, workspace) => {
+    if (!boxSelectState.active || !boxSelectState.startPos || !workspace) return;
+    
+    const start = boxSelectState.startPos;
+    const current = boxSelectState.currentPos;
+    
+    if (boxSelectState.rectElement) {
+      boxSelectState.rectElement.style.display = 'none';
+    }
+    
+    // Calculate selection box bounds
+    const boxLeft = Math.min(start.x, current.x);
+    const boxRight = Math.max(start.x, current.x);
+    const boxTop = Math.min(start.y, current.y);
+    const boxBottom = Math.max(start.y, current.y);
+    
+    // Only select if box has meaningful size
+    if (Math.abs(boxRight - boxLeft) > 5 && Math.abs(boxBottom - boxTop) > 5) {
+      // Create Rect with (top, bottom, left, right) constructor
+      const Rect = Blockly.utils.Rect;
+      const selectionBox = new Rect(boxTop, boxBottom, boxLeft, boxRight);
+      
+      // Get all blocks and check which ones intersect with the selection box
+      const allBlocks = workspace.getAllBlocks(false);
+      const selectedBlocks = [];
+      
+      allBlocks.forEach(block => {
+        if (!block || block.isShadow() || block.isInsertionMarker()) return;
+        
+        try {
+          const blockBounds = block.getBoundingRectangle();
+          if (blockBounds && selectionBox.intersects(blockBounds)) {
+            selectedBlocks.push(block);
+          }
+        } catch (err) {
+          // Skip blocks that don't have bounding rectangle
+        }
+      });
+      
+      // Add selected blocks to multi-selection
+      if (selectedBlocks.length > 0) {
+        // Clear existing selection if Ctrl/Cmd not held
+        if (!(e.ctrlKey || e.metaKey)) {
+          window.__multiSelectedBlocks.forEach(block => {
+            if (block.removeSelect) block.removeSelect();
+          });
+          window.__multiSelectedBlocks = [];
+        }
+        
+        // Add new blocks to selection
+        selectedBlocks.forEach(block => {
+          if (window.__multiSelectedBlocks.indexOf(block) === -1) {
+            window.__multiSelectedBlocks.push(block);
+            block.addSelect();
+          }
+        });
+        
+        // Update Blockly.selected for compatibility
+        if (selectedBlocks.length > 0) {
+          Blockly.common.setSelected(selectedBlocks[selectedBlocks.length - 1]);
+        }
+        
+        console.log(\`[Multi-Select] Box selected \${selectedBlocks.length} blocks\`);
+      }
+    }
+    
+    // Reset box selection state
+    boxSelectState.startPos = null;
+    boxSelectState.currentPos = null;
+    
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  
+  const enableBoxSelectMode = () => {
+    if (boxSelectState.active) return;
+    
+    const workspace = Blockly.getMainWorkspace();
+    if (!workspace) {
+      console.warn('[Multi-Select] No workspace found for box selection');
+      return;
+    }
+    
+    boxSelectState.active = true;
+    boxSelectState.workspace = workspace;
+    
+    // Create overlay for mouse events
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:transparent;cursor:crosshair;pointer-events:auto;';
+    document.body.appendChild(overlay);
+    boxSelectState.overlay = overlay;
+    
+    // Mouse handlers
+    boxSelectState.downHandler = (e) => {
+      if (e.target === overlay || e.target.closest('.blocklySvg')) {
+        startBoxSelect(e, workspace);
+      }
+    };
+    
+    boxSelectState.moveHandler = (e) => {
+      if (boxSelectState.startPos) {
+        updateBoxSelect(e, workspace);
+      }
+    };
+    
+    boxSelectState.upHandler = (e) => {
+      if (boxSelectState.startPos) {
+        endBoxSelect(e, workspace);
+      }
+    };
+    
+    overlay.addEventListener('mousedown', boxSelectState.downHandler, true);
+    document.addEventListener('mousemove', boxSelectState.moveHandler, true);
+    document.addEventListener('mouseup', boxSelectState.upHandler, true);
+    
+    console.log('%c[Multi-Select] Box selection mode enabled. Drag to select blocks. Press Ctrl+B again to exit.', 'color: #4285f4; font-weight: bold;');
+  };
+  
+  const disableBoxSelectMode = () => {
+    if (!boxSelectState.active) return;
+    
+    boxSelectState.active = false;
+    
+    if (boxSelectState.overlay) {
+      if (boxSelectState.downHandler) {
+        boxSelectState.overlay.removeEventListener('mousedown', boxSelectState.downHandler, true);
+      }
+      if (boxSelectState.overlay.parentNode) {
+        boxSelectState.overlay.parentNode.removeChild(boxSelectState.overlay);
+      }
+      boxSelectState.overlay = null;
+    }
+    
+    if (boxSelectState.moveHandler) {
+      document.removeEventListener('mousemove', boxSelectState.moveHandler, true);
+      boxSelectState.moveHandler = null;
+    }
+    
+    if (boxSelectState.upHandler) {
+      document.removeEventListener('mouseup', boxSelectState.upHandler, true);
+      boxSelectState.upHandler = null;
+    }
+    
+    if (boxSelectState.rectElement && boxSelectState.rectElement.parentNode) {
+      boxSelectState.rectElement.parentNode.removeChild(boxSelectState.rectElement);
+      boxSelectState.rectElement = null;
+    }
+    
+    boxSelectState.startPos = null;
+    boxSelectState.currentPos = null;
+    boxSelectState.workspace = null;
+    
+    console.log('[Multi-Select] Box selection mode disabled.');
+  };
+  
+  // Register Ctrl+B to toggle box selection mode
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'b') {
+      const t = e.target;
+      const isTyping = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (isTyping) return;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      if (boxSelectState.active) {
+        disableBoxSelectMode();
+      } else {
+        enableBoxSelectMode();
+      }
+    }
+  }, true);
+  
+  console.log('%c[Multi-Select] Enabled! Ctrl+Click to select multiple blocks, G to drag multiple, Ctrl+B for box selection', 'color: #00c853; font-weight: bold;');
+  
+})();`;
+}
+</script>

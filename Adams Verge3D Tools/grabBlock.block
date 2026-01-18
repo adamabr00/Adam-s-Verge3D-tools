@@ -233,6 +233,13 @@ function code(block) {
       const t = e.target;
       const isTyping = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
       if (isTyping) return;
+      
+      // Check if multi-selection is active - let multiSelect handle it
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        return; // Let multiSelect block handle multi-drag
+      }
+      
       e.preventDefault();
       startDrag();
     }
