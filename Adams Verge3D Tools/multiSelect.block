@@ -1,5 +1,5 @@
 <template color="#de3900" prev="true" next="true" 
-  tooltip="Enable multi-selection: Shift+Click to select multiple blocks, Ctrl+B for box selection, G to drag multiple blocks, X to delete, Ctrl+C to copy, Ctrl+V to paste, Ctrl+D to duplicate all selected blocks.">
+  tooltip="Enable multi-selection: Shift+Click to select multiple blocks, Ctrl+B for box selection, G to drag multiple blocks, X to delete, Ctrl+C to copy, Ctrl+V to paste, Ctrl+D to duplicate, Ctrl+L to left-align all selected blocks.">
   <dummy><label>Enable Multi-Selection</label></dummy>
 </template>
 
@@ -639,6 +639,10 @@ function code(block) {
     dragging: false,
     blocks: [],
     startPositions: [],
+    topLevelBlocks: [],
+    topLevelStartPositions: [],
+    lastPositions: [], // Cache last positions to avoid getRelativeToSurfaceXY calls
+    workspace: null,
     startMousePos: null,
     overlay: null,
     moveHandler: null,
@@ -784,63 +788,103 @@ function code(block) {
       Blockly.Events.disable();
     }
     
-    // Handle mouse movement
+    // Filter top-level blocks once (for performance) - workspace already declared above
+    const topLevelBlocks = blocksToDrag.filter(block => {
+      const parent = block.getParent && block.getParent();
+      return !parent || blocksToDrag.indexOf(parent) === -1;
+    });
+    
+    // Store filtered blocks and their start positions in state
+    multiDragState.topLevelBlocks = topLevelBlocks;
+    multiDragState.topLevelStartPositions = topLevelBlocks.map(block => {
+      if (typeof block.getRelativeToSurfaceXY === 'function') {
+        const pos = block.getRelativeToSurfaceXY();
+        return { x: pos.x, y: pos.y };
+      }
+      return null;
+    });
+    
+    // Initialize lastPositions with start positions (for moveBy delta calculation)
+    // This avoids calling getRelativeToSurfaceXY on every mousemove
+    multiDragState.lastPositions = multiDragState.topLevelStartPositions.map(pos => 
+      pos ? { x: pos.x, y: pos.y } : null
+    );
+    
+    // Cache workspace reference for coordinate conversion
+    multiDragState.workspace = workspace;
+    
+    // Optimized coordinate conversion function (reuse optimized approach from box selection)
+    const screenToWorkspaceCoordsFast = (clientX, clientY, ws) => {
+      // Use Blockly's optimized utility if available
+      if (Blockly.utils && Blockly.utils.svgMath && Blockly.utils.svgMath.screenToWsCoordinates) {
+        const coord = Blockly.utils.svgMath.screenToWsCoordinates(ws, { x: clientX, y: clientY });
+        return { x: coord.x, y: coord.y };
+      }
+      
+      // Fallback to optimized manual conversion (avoids expensive SVG matrix operations)
+      const injectionDiv = ws.getInjectionDiv();
+      const boundingRect = injectionDiv.getBoundingClientRect();
+      const clientOffsetX = clientX - boundingRect.left;
+      const clientOffsetY = clientY - boundingRect.top;
+      const origin = ws.getOriginOffsetInPixels();
+      const scale = ws.scale;
+      
+      return {
+        x: (clientOffsetX - origin.x) / scale,
+        y: (clientOffsetY - origin.y) / scale
+      };
+    };
+    
+    // Handle mouse movement - optimized for performance
     multiDragState.moveHandler = (moveEvent) => {
       if (!multiDragState.dragging) return;
       
-      const workspace = multiDragState.blocks[0].workspace;
-      const svg = workspace.getParentSvg();
-      const ctm = svg.getScreenCTM();
+      const ws = multiDragState.workspace;
+      if (!ws) return;
       
-      let currentMousePos;
-      if (ctm) {
-        const pt = svg.createSVGPoint();
-        pt.x = moveEvent.clientX;
-        pt.y = moveEvent.clientY;
-        const svgPt = pt.matrixTransform(ctm.inverse());
-        const origin = workspace.getOriginOffsetInPixels();
-        currentMousePos = {
-          x: (svgPt.x - origin.x) / workspace.scale,
-          y: (svgPt.y - origin.y) / workspace.scale
-        };
-      } else {
-        currentMousePos = { x: moveEvent.clientX, y: moveEvent.clientY };
-      }
-      
+      // Fast coordinate conversion (no expensive SVG matrix operations)
+      const currentMousePos = screenToWorkspaceCoordsFast(moveEvent.clientX, moveEvent.clientY, ws);
       const deltaX = currentMousePos.x - multiDragState.startMousePos.x;
       const deltaY = currentMousePos.y - multiDragState.startMousePos.y;
       
-      // Move all blocks by the same delta (events disabled during drag)
-      // Only move top-level blocks (blocks without parents)
-      // Children will move automatically with their parent
-      multiDragState.blocks.forEach((block, i) => {
-        if (!block || !block.workspace || block.disposed) return;
-        const startPos = multiDragState.startPositions[i];
-        if (!startPos) return;
-        
-        // Only move blocks without parents (top-level blocks)
-        // Blocks with parents should have been disconnected before drag started
-        const parent = block.getParent && block.getParent();
-        if (parent) {
-          // If block still has a parent, check if parent is also being dragged
-          if (multiDragState.blocks.indexOf(parent) !== -1) {
-            return; // Skip this child block, parent will handle moving it
-          }
-          // Block has a parent that's not being dragged - this shouldn't happen
-          // but skip it to avoid errors
-          console.warn('[Multi-Select] Block still has parent during drag, skipping:', block.id);
-          return;
-        }
+      // Move only top-level blocks (pre-filtered for performance, no parent checks during drag)
+      const blocks = multiDragState.topLevelBlocks;
+      const startPositions = multiDragState.topLevelStartPositions;
+      
+      // Use moveDuringDrag if available (much faster - directly manipulates SVG transform)
+      // Otherwise fall back to moveBy, but avoid calling getRelativeToSurfaceXY repeatedly
+      const newLoc = { x: deltaX, y: deltaY };
+      
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        if (!block || !block.workspace || block.disposed) continue;
+        const startPos = startPositions[i];
+        if (!startPos) continue;
         
         const newX = startPos.x + deltaX;
         const newY = startPos.y + deltaY;
         
         try {
-          if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
-            block.moveTo(new Blockly.utils.Coordinate(newX, newY));
-          } else if (typeof block.moveBy === 'function') {
-            const cur = block.getRelativeToSurfaceXY();
-            block.moveBy(newX - cur.x, newY - cur.y);
+          // Use moveBy - calculate delta from last position or start position
+          const lastPos = multiDragState.lastPositions[i];
+          let dx, dy;
+          
+          if (lastPos && lastPos.x !== undefined && lastPos.y !== undefined) {
+            dx = newX - lastPos.x;
+            dy = newY - lastPos.y;
+          } else {
+            // First move or lastPos not set - calculate delta from start position
+            dx = newX - startPos.x;
+            dy = newY - startPos.y;
+          }
+          
+          // Only move if delta is significant to avoid unnecessary updates
+          if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+            if (typeof block.moveBy === 'function') {
+              block.moveBy(dx, dy);
+              // Update cached position
+              multiDragState.lastPositions[i] = { x: newX, y: newY };
+            }
           }
         } catch (err) {
           // Suppress "Block has parent" errors - shouldn't happen but handle gracefully
@@ -849,7 +893,7 @@ function code(block) {
             console.warn('[Multi-Select] Error moving block:', err);
           }
         }
-      });
+      }
     };
     
     // Store events enabled state for restoration
@@ -889,6 +933,10 @@ function code(block) {
     // Clear state before restore to prevent interference
     multiDragState.blocks = [];
     multiDragState.startPositions = [];
+    multiDragState.topLevelBlocks = [];
+    multiDragState.topLevelStartPositions = [];
+    multiDragState.lastPositions = [];
+    multiDragState.workspace = null;
     multiDragState.startMousePos = null;
     
     // Re-enable events if they were enabled before drag
@@ -1026,6 +1074,7 @@ function code(block) {
     return rect;
   };
   
+  // Optimized rectangle update - batch attribute changes and use direct property access
   const updateBoxSelectRect = () => {
     if (!boxSelectState.rectElement || !boxSelectState.startPos || !boxSelectState.currentPos) {
       return;
@@ -1039,27 +1088,41 @@ function code(block) {
     const width = Math.abs(current.x - start.x);
     const height = Math.abs(current.y - start.y);
     
-    boxSelectState.rectElement.setAttribute('x', x);
-    boxSelectState.rectElement.setAttribute('y', y);
-    boxSelectState.rectElement.setAttribute('width', width);
-    boxSelectState.rectElement.setAttribute('height', height);
-    boxSelectState.rectElement.style.display = width > 0 && height > 0 ? 'block' : 'none';
+    // Use direct property access instead of setAttribute for better performance
+    const rect = boxSelectState.rectElement;
+    rect.x.baseVal.value = x;
+    rect.y.baseVal.value = y;
+    rect.width.baseVal.value = width;
+    rect.height.baseVal.value = height;
+    
+    // Only update display style if it changed
+    const shouldShow = width > 0 && height > 0;
+    if (shouldShow && rect.style.display !== 'block') {
+      rect.style.display = 'block';
+    } else if (!shouldShow && rect.style.display !== 'none') {
+      rect.style.display = 'none';
+    }
   };
   
+  // Optimized coordinate conversion using Blockly's built-in method if available
   const screenToWorkspaceCoords = (workspace, clientX, clientY) => {
-    const svg = workspace.getParentSvg();
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: clientX, y: clientY };
+    // Use Blockly's optimized utility if available
+    if (Blockly.utils && Blockly.utils.svgMath && Blockly.utils.svgMath.screenToWsCoordinates) {
+      const coord = Blockly.utils.svgMath.screenToWsCoordinates(workspace, { x: clientX, y: clientY });
+      return { x: coord.x, y: coord.y };
+    }
     
-    const pt = svg.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    const svgPt = pt.matrixTransform(ctm.inverse());
+    // Fallback to manual conversion (optimized)
+    const injectionDiv = workspace.getInjectionDiv();
+    const boundingRect = injectionDiv.getBoundingClientRect();
+    const clientOffsetX = clientX - boundingRect.left;
+    const clientOffsetY = clientY - boundingRect.top;
     const origin = workspace.getOriginOffsetInPixels();
+    const scale = workspace.scale;
     
     return {
-      x: (svgPt.x - origin.x) / workspace.scale,
-      y: (svgPt.y - origin.y) / workspace.scale
+      x: (clientOffsetX - origin.x) / scale,
+      y: (clientOffsetY - origin.y) / scale
     };
   };
   
@@ -1087,6 +1150,7 @@ function code(block) {
   const updateBoxSelect = (e, workspace) => {
     if (!boxSelectState.active || !boxSelectState.startPos || !workspace) return;
     
+    // Update immediately for responsive feel - coordinate conversion is now optimized
     const coords = screenToWorkspaceCoords(workspace, e.clientX, e.clientY);
     boxSelectState.currentPos = coords;
     updateBoxSelectRect();
@@ -1094,6 +1158,11 @@ function code(block) {
   
   const endBoxSelect = (e, workspace) => {
     if (!boxSelectState.active || !boxSelectState.startPos || !workspace) return;
+    
+    // Update final position immediately
+    const coords = screenToWorkspaceCoords(workspace, e.clientX, e.clientY);
+    boxSelectState.currentPos = coords;
+    updateBoxSelectRect();
     
     const start = boxSelectState.startPos;
     const current = boxSelectState.currentPos;
@@ -1114,7 +1183,48 @@ function code(block) {
       const Rect = Blockly.utils.Rect;
       const selectionBox = new Rect(boxTop, boxBottom, boxLeft, boxRight);
       
+      // Helper function to get block's own bounding rectangle (without children)
+      // Similar to improvedSearch.block - uses block's own dimensions, not including children
+      function getBlockOwnBounds(block) {
+        if (!block || !block.rendered) return null;
+        
+        const pos = block.getRelativeToSurfaceXY();
+        if (!pos) return null;
+        
+        // Get block's own dimensions (not including children)
+        let width, height;
+        if (block.pathObject && block.pathObject.svgPath) {
+          const pathBBox = block.pathObject.svgPath.getBBox && block.pathObject.svgPath.getBBox();
+          if (pathBBox && pathBBox.width > 0 && pathBBox.height > 0) {
+            width = pathBBox.width;
+            height = pathBBox.height;
+          } else {
+            // Fallback to block's own dimensions
+            width = block.width || 100;
+            height = block.height || 40;
+          }
+        } else {
+          // Fallback to block's own dimensions
+          width = block.width || 100;
+          height = block.height || 40;
+        }
+        
+        // Handle RTL
+        let left, right;
+        if (block.RTL) {
+          left = pos.x - width;
+          right = pos.x;
+        } else {
+          left = pos.x;
+          right = pos.x + width;
+        }
+        
+        const Rect = Blockly.utils.Rect;
+        return new Rect(pos.y, pos.y + height, left, right);
+      }
+      
       // Get all blocks and check which ones intersect with the selection box
+      // Only check each block's own bounds (not including children)
       const allBlocks = workspace.getAllBlocks(false);
       const selectedBlocks = [];
       
@@ -1122,7 +1232,7 @@ function code(block) {
         if (!block || block.isShadow() || block.isInsertionMarker()) return;
         
         try {
-          const blockBounds = block.getBoundingRectangle();
+          const blockBounds = getBlockOwnBounds(block);
           if (blockBounds && selectionBox.intersects(blockBounds)) {
             selectedBlocks.push(block);
           }
@@ -1131,8 +1241,14 @@ function code(block) {
         }
       });
       
+      // Since we're using getBlockOwnBounds() which only uses the block's own dimensions
+      // (not including children), we don't need to filter out parents when children are selected.
+      // Each block is selected based on its own bounds intersecting the selection box.
+      // This means if you box-select a whole stack, all blocks in that stack will be selected.
+      const finalBlocks = selectedBlocks;
+      
       // Add selected blocks to multi-selection
-      if (selectedBlocks.length > 0) {
+      if (finalBlocks.length > 0) {
         // Clear existing selection if Shift not held
         if (!e.shiftKey) {
           window.__multiSelectedBlocks.forEach(block => {
@@ -1142,7 +1258,7 @@ function code(block) {
         }
         
         // Add new blocks to selection
-        selectedBlocks.forEach(block => {
+        finalBlocks.forEach(block => {
           if (window.__multiSelectedBlocks.indexOf(block) === -1) {
             window.__multiSelectedBlocks.push(block);
             block.addSelect();
@@ -1150,11 +1266,11 @@ function code(block) {
         });
         
         // Update Blockly.selected for compatibility
-        if (selectedBlocks.length > 0) {
-          Blockly.common.setSelected(selectedBlocks[selectedBlocks.length - 1]);
+        if (finalBlocks.length > 0) {
+          Blockly.common.setSelected(finalBlocks[finalBlocks.length - 1]);
         }
         
-        console.log(\`[Multi-Select] Box selected \${selectedBlocks.length} blocks\`);
+        console.log(\`[Multi-Select] Box selected \${finalBlocks.length} blocks\`);
         
         // Automatically disable box selection mode after successful selection
         disableBoxSelectMode();
@@ -1268,7 +1384,72 @@ function code(block) {
     }
   }, true);
   
-  console.log('%c[Multi-Select] Enabled! Shift+Click to select multiple blocks, G to drag multiple, Ctrl+B for box selection, Ctrl+C/V/D for copy/paste/duplicate, X to delete', 'color: #00c853; font-weight: bold;');
+  // Left-align selected blocks (Ctrl+L or Alt+L)
+  const leftAlignBlocks = () => {
+    const multi = window.__multiSelectedBlocks || [];
+    if (multi.length < 2) return;
+    
+    const topLevel = filterTopLevelBlocks(multi);
+    if (topLevel.length < 2) return;
+    
+    // Find the leftmost x position
+    let leftmostX = Infinity;
+    topLevel.forEach(block => {
+      if (block && typeof block.getRelativeToSurfaceXY === 'function') {
+        const pos = block.getRelativeToSurfaceXY();
+        if (pos && pos.x < leftmostX) {
+          leftmostX = pos.x;
+        }
+      }
+    });
+    
+    if (leftmostX === Infinity) return;
+    
+    // Group events for undo/redo
+    const wasGrouped = Blockly.Events.getGroup();
+    Blockly.Events.setGroup(true);
+    const eventsWereEnabled = Blockly.Events.isEnabled();
+    if (!eventsWereEnabled) {
+      Blockly.Events.enable();
+    }
+    
+    try {
+      // Move all blocks to the leftmost x position
+      topLevel.forEach(block => {
+        if (!block || !block.workspace || block.disposed) return;
+        if (typeof block.getRelativeToSurfaceXY === 'function') {
+          const pos = block.getRelativeToSurfaceXY();
+          if (pos && pos.x !== leftmostX) {
+            const dx = leftmostX - pos.x;
+            if (typeof block.moveBy === 'function') {
+              block.moveBy(dx, 0);
+            }
+          }
+        }
+      });
+    } finally {
+      Blockly.Events.setGroup(wasGrouped);
+      if (!eventsWereEnabled) {
+        Blockly.Events.disable();
+      }
+    }
+    
+    console.log(\`[Multi-Select] Left-aligned \${topLevel.length} blocks\`);
+  };
+  
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey || e.altKey) && e.key && e.key.toLowerCase() === 'l') {
+      const t = e.target;
+      const isTyping = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (isTyping) return;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      leftAlignBlocks();
+    }
+  }, true);
+  
+  console.log('%c[Multi-Select] Enabled! Shift+Click to select multiple blocks, G to drag multiple, Ctrl+B for box selection, Ctrl+C/V/D for copy/paste/duplicate, Ctrl+L for left-align, X to delete', 'color: #00c853; font-weight: bold;');
   
 })();`;
 }
