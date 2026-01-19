@@ -1,5 +1,5 @@
 <template color="#de3900" prev="true" next="true" 
-  tooltip="Enable multi-selection: Ctrl+Click to select multiple blocks, Ctrl+B for box selection, G to drag multiple blocks, X to delete all selected blocks.">
+  tooltip="Enable multi-selection: Shift+Click to select multiple blocks, Ctrl+B for box selection, G to drag multiple blocks, X to delete, Ctrl+C to copy, Ctrl+V to paste, Ctrl+D to duplicate all selected blocks.">
   <dummy><label>Enable Multi-Selection</label></dummy>
 </template>
 
@@ -19,15 +19,13 @@ function code(block) {
   window.__multiSelectEnabled = true;
   
   // Store modifier keys globally so select() can access them
-  window.__lastModifierKeys = { ctrl: false, meta: false };
+  window.__lastModifierKeys = { shift: false };
   
   // Intercept Gesture.doStart to capture modifier keys before select() is called
   const originalDoStart = Blockly.Gesture.prototype.doStart;
   Blockly.Gesture.prototype.doStart = function(e) {
     // Capture modifier keys BEFORE select() is called
     window.__lastModifierKeys = {
-      ctrl: e.ctrlKey || false,
-      meta: e.metaKey || false,
       shift: e.shiftKey || false
     };
     
@@ -48,7 +46,7 @@ function code(block) {
     }
     
     const modifiers = window.__lastModifierKeys || {};
-    const isMultiSelect = modifiers.ctrl || modifiers.meta;
+    const isMultiSelect = modifiers.shift;
     
     if (isMultiSelect && window.__multiSelectEnabled) {
       // Multi-select mode: toggle block in selection array
@@ -211,6 +209,423 @@ function code(block) {
   }
   
   // ============================================
+  // STEP 5.5: Add copy/paste/duplicate support for multiple blocks
+  // ============================================
+  // Custom clipboard for multi-selection
+  window.__multiClipboard = null;
+  
+  // Helper to filter out child blocks whose parents are also selected
+  const filterTopLevelBlocks = (blocks) => {
+    return blocks.filter(block => {
+      if (!block || !block.workspace || block.disposed) return false;
+      const parent = block.getParent && block.getParent();
+      if (!parent) return true; // Top-level block, include it
+      // Check if parent is also in the selection
+      return blocks.indexOf(parent) === -1;
+    });
+  };
+  
+  // Override copy shortcut for multi-selection
+  const copyShortcut = registry.registry_['copy'];
+  if (copyShortcut) {
+    const originalCopyCallback = copyShortcut.callback;
+    const originalCopyPrecondition = copyShortcut.preconditionFn;
+    
+    copyShortcut.preconditionFn = function(workspace) {
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        // Filter to top-level blocks only
+        const topLevel = filterTopLevelBlocks(multi);
+        return !workspace.options.readOnly && 
+               !Blockly.Gesture.inProgress() && 
+               topLevel.length > 0 &&
+               topLevel.some(b => b && b.isMovable && b.isMovable());
+      }
+      if (originalCopyPrecondition) {
+        return originalCopyPrecondition.call(this, workspace);
+      }
+      return false;
+    };
+    
+    copyShortcut.callback = function(workspace, e) {
+      const multi = window.__multiSelectedBlocks || [];
+      
+      if (multi.length > 1) {
+        e.preventDefault();
+        
+        // Filter to top-level blocks only (exclude children whose parents are selected)
+        const blocksToCopy = filterTopLevelBlocks(multi);
+        
+        if (blocksToCopy.length === 0) {
+          return false;
+        }
+        
+        // Serialize all blocks with their positions
+        const copyDataArray = [];
+        let minX = Infinity, minY = Infinity;
+        
+        blocksToCopy.forEach(block => {
+          if (!block || !block.workspace || block.disposed) return;
+          
+          const copyData = block.toCopyData && block.toCopyData();
+          if (!copyData) return;
+          
+          // Get block position for offset calculation
+          const pos = block.getRelativeToSurfaceXY && block.getRelativeToSurfaceXY();
+          if (pos) {
+            minX = Math.min(minX, pos.x);
+            minY = Math.min(minY, pos.y);
+          }
+          
+          copyDataArray.push({
+            copyData: copyData,
+            originalX: pos ? pos.x : 0,
+            originalY: pos ? pos.y : 0
+          });
+        });
+        
+        if (copyDataArray.length > 0) {
+          // Store multi-clipboard data
+          window.__multiClipboard = {
+            blocks: copyDataArray,
+            minX: minX === Infinity ? 0 : minX,
+            minY: minY === Infinity ? 0 : minY,
+            workspace: workspace
+          };
+          
+          // Also copy the first block to regular clipboard for compatibility
+          if (copyDataArray.length > 0 && originalCopyCallback) {
+            const firstBlock = blocksToCopy[0];
+            if (firstBlock && firstBlock.toCopyData) {
+              Blockly.clipboard.copy(firstBlock);
+            }
+          }
+          
+          console.log(\`[Multi-Select] Copied \${copyDataArray.length} blocks\`);
+          return true;
+        }
+        
+        return false;
+      } else {
+        // Single block - use original behavior
+        if (originalCopyCallback) {
+          return originalCopyCallback.call(this, workspace, e);
+        }
+        return false;
+      }
+    };
+  }
+  
+  // Override paste shortcut for multi-selection
+  const pasteShortcut = registry.registry_['paste'];
+  if (pasteShortcut) {
+    const originalPasteCallback = pasteShortcut.callback;
+    const originalPastePrecondition = pasteShortcut.preconditionFn;
+    
+    pasteShortcut.preconditionFn = function(workspace) {
+      // Check if we have multi-clipboard data
+      if (window.__multiClipboard && window.__multiClipboard.blocks) {
+        return !workspace.options.readOnly && !Blockly.Gesture.inProgress();
+      }
+      if (originalPastePrecondition) {
+        return originalPastePrecondition.call(this, workspace);
+      }
+      return false;
+    };
+    
+    pasteShortcut.callback = function(workspace, e) {
+      // Check for multi-clipboard first
+      if (window.__multiClipboard && window.__multiClipboard.blocks) {
+        e.preventDefault();
+        
+        const multiClipboard = window.__multiClipboard;
+        const blocks = multiClipboard.blocks;
+        const workspace = multiClipboard.workspace || Blockly.getMainWorkspace();
+        
+        if (!workspace || blocks.length === 0) {
+          return false;
+        }
+        
+        // Calculate paste offset (offset from original min position)
+        // Paste blocks offset from their original positions
+        const offsetX = 50; // Offset new blocks to the right
+        const offsetY = 50; // Offset new blocks down
+        
+        // Group all paste events together for undo
+        const wasGrouped = Blockly.Events.getGroup();
+        const eventsWereEnabled = Blockly.Events.isEnabled();
+        Blockly.Events.setGroup(true);
+        if (!eventsWereEnabled) {
+          Blockly.Events.enable();
+        }
+        
+        const pastedBlocks = [];
+        
+        try {
+          blocks.forEach(({copyData, originalX, originalY}) => {
+            if (!copyData || !copyData.saveInfo) return;
+            
+            // Check workspace capacity
+            let targetWorkspace = copyData.source;
+            if (targetWorkspace && targetWorkspace.isFlyout) {
+              targetWorkspace = targetWorkspace.targetWorkspace;
+            }
+            if (!targetWorkspace) {
+              targetWorkspace = workspace;
+            }
+            
+            // Check capacity if typeCounts available
+            if (copyData.typeCounts && 
+                !targetWorkspace.isCapacityAvailable(copyData.typeCounts)) {
+              return; // Skip this block if capacity exceeded
+            }
+            
+            // Paste the block
+            const pastedBlock = targetWorkspace.paste(copyData.saveInfo);
+            if (pastedBlock && pastedBlock.getRelativeToSurfaceXY) {
+              // Calculate new position with offset
+              const newX = originalX + offsetX;
+              const newY = originalY + offsetY;
+              
+              // Move to new position
+              if (typeof pastedBlock.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+                pastedBlock.moveTo(new Blockly.utils.Coordinate(newX, newY));
+              } else if (typeof pastedBlock.moveBy === 'function') {
+                const currentPos = pastedBlock.getRelativeToSurfaceXY();
+                pastedBlock.moveBy(newX - currentPos.x, newY - currentPos.y);
+              }
+              
+              pastedBlocks.push(pastedBlock);
+            }
+          });
+          
+          // Select all pasted blocks
+          if (pastedBlocks.length > 0) {
+            // Clear existing selection
+            window.__multiSelectedBlocks.forEach(block => {
+              if (block.removeSelect) block.removeSelect();
+            });
+            window.__multiSelectedBlocks = [];
+            
+            // Select all pasted blocks
+            pastedBlocks.forEach(block => {
+              window.__multiSelectedBlocks.push(block);
+              block.addSelect();
+            });
+            
+            // Set last pasted block as selected for compatibility
+            Blockly.common.setSelected(pastedBlocks[pastedBlocks.length - 1]);
+            
+            console.log(\`[Multi-Select] Pasted \${pastedBlocks.length} blocks\`);
+          }
+        } finally {
+          Blockly.Events.setGroup(wasGrouped);
+          if (!eventsWereEnabled) {
+            Blockly.Events.disable();
+          }
+        }
+        
+        return pastedBlocks.length > 0;
+      } else {
+        // No multi-clipboard, use original behavior
+        if (originalPasteCallback) {
+          return originalPasteCallback.call(this, workspace, e);
+        }
+        return false;
+      }
+    };
+  }
+  
+  // Override cut shortcut for multi-selection
+  const cutShortcut = registry.registry_['cut'];
+  if (cutShortcut) {
+    const originalCutCallback = cutShortcut.callback;
+    const originalCutPrecondition = cutShortcut.preconditionFn;
+    
+    cutShortcut.preconditionFn = function(workspace) {
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        const topLevel = filterTopLevelBlocks(multi);
+        return !workspace.options.readOnly && 
+               !Blockly.Gesture.inProgress() && 
+               topLevel.length > 0 &&
+               topLevel.some(b => b && b.isMovable && b.isMovable() && b.isDeletable()) &&
+               !workspace.isFlyout;
+      }
+      if (originalCutPrecondition) {
+        return originalCutPrecondition.call(this, workspace);
+      }
+      return false;
+    };
+    
+    cutShortcut.callback = function(workspace, e) {
+      const multi = window.__multiSelectedBlocks || [];
+      
+      if (multi.length > 1) {
+        // Copy first (same as copy shortcut)
+        const copyShortcut = registry.registry_['copy'];
+        if (copyShortcut && copyShortcut.callback) {
+          copyShortcut.callback(workspace, e);
+        }
+        
+        // Then delete all selected blocks (same as delete shortcut)
+        const blocksToDelete = filterTopLevelBlocks(multi).filter(block => 
+          block && block.workspace && block.isDeletable() && !block.disposed
+        );
+        
+        if (blocksToDelete.length === 0) {
+          window.__multiSelectedBlocks = [];
+          return false;
+        }
+        
+        window.__multiSelectedBlocks = [];
+        
+        // Group all deletion events together for undo
+        const wasGrouped = Blockly.Events.getGroup();
+        const eventsWereEnabled = Blockly.Events.isEnabled();
+        Blockly.Events.setGroup(true);
+        if (!eventsWereEnabled) {
+          Blockly.Events.enable();
+        }
+        
+        try {
+          blocksToDelete.forEach((block) => {
+            if (block && block.workspace && !block.disposed && block.isDeletable()) {
+              try {
+                if (typeof block.checkAndDelete === 'function') {
+                  block.checkAndDelete();
+                } else if (typeof block.dispose === 'function') {
+                  block.dispose(false);
+                }
+              } catch (err) {
+                // Suppress known errors
+                const errMsg = String(err.message || err || '');
+                if (!(errMsg.includes('toLowerCase') || errMsg.includes('Names.equals')) || !errMsg.includes('null')) {
+                  console.warn('[Multi-Select] Error cutting block:', err);
+                }
+              }
+            }
+          });
+        } finally {
+          Blockly.Events.setGroup(wasGrouped);
+          if (!eventsWereEnabled) {
+            Blockly.Events.disable();
+          }
+        }
+        
+        console.log(\`[Multi-Select] Cut \${blocksToDelete.length} blocks\`);
+        return true;
+      } else {
+        if (originalCutCallback) {
+          return originalCutCallback.call(this, workspace, e);
+        }
+        return false;
+      }
+    };
+  }
+  
+  // Add duplicate shortcut (Ctrl+D) for multi-selection
+  const duplicateShortcut = registry.registry_['duplicate'];
+  const KeyCodes = Blockly.utils.KeyCodes;
+  
+  const duplicateCallback = function(workspace, e) {
+    const multi = window.__multiSelectedBlocks || [];
+    
+    if (multi.length > 1) {
+      e.preventDefault();
+      
+      // Copy first
+      const copyShortcut = registry.registry_['copy'];
+      if (copyShortcut && copyShortcut.callback) {
+        copyShortcut.callback(workspace, e);
+      }
+      
+      // Then paste immediately
+      const pasteShortcut = registry.registry_['paste'];
+      if (pasteShortcut && pasteShortcut.callback) {
+        // Small delay to ensure copy completes
+        setTimeout(() => {
+          pasteShortcut.callback(workspace, e);
+        }, 10);
+      }
+      
+      return true;
+    } else {
+      // Single block duplicate - use Blockly's duplicate if available
+      const selected = Blockly.common.getSelected();
+      if (selected && selected.toCopyData && Blockly.clipboard && Blockly.clipboard.duplicate) {
+        Blockly.clipboard.duplicate(selected);
+        return true;
+      }
+    }
+    
+    return false;
+  };
+  
+  if (!duplicateShortcut) {
+    // Register duplicate shortcut if it doesn't exist
+    registry.register({
+      name: 'duplicate',
+      preconditionFn: function(workspace) {
+        const multi = window.__multiSelectedBlocks || [];
+        if (multi.length > 1) {
+          const topLevel = filterTopLevelBlocks(multi);
+          return !workspace.options.readOnly && 
+                 !Blockly.Gesture.inProgress() && 
+                 topLevel.length > 0 &&
+                 topLevel.some(b => b && b.isMovable && b.isMovable());
+        }
+        const selected = Blockly.common.getSelected();
+        return !workspace.options.readOnly && 
+               !Blockly.Gesture.inProgress() && 
+               selected && selected.isMovable && selected.isMovable();
+      },
+      callback: duplicateCallback
+    });
+    
+    // Register Ctrl+D and Cmd+D key mappings
+    const ctrlD = registry.createSerializedKey(
+        KeyCodes.D, [KeyCodes.CTRL]);
+    registry.addKeyMapping(ctrlD, 'duplicate');
+    
+    const metaD = registry.createSerializedKey(
+        KeyCodes.D, [KeyCodes.META]);
+    registry.addKeyMapping(metaD, 'duplicate');
+  } else {
+    // Override existing duplicate shortcut
+    const originalDuplicateCallback = duplicateShortcut.callback;
+    const originalDuplicatePrecondition = duplicateShortcut.preconditionFn;
+    
+    duplicateShortcut.preconditionFn = function(workspace) {
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        const topLevel = filterTopLevelBlocks(multi);
+        return !workspace.options.readOnly && 
+               !Blockly.Gesture.inProgress() && 
+               topLevel.length > 0 &&
+               topLevel.some(b => b && b.isMovable && b.isMovable());
+      }
+      if (originalDuplicatePrecondition) {
+        return originalDuplicatePrecondition.call(this, workspace);
+      }
+      return false;
+    };
+    
+    duplicateShortcut.callback = function(workspace, e) {
+      const multi = window.__multiSelectedBlocks || [];
+      
+      if (multi.length > 1) {
+        return duplicateCallback.call(this, workspace, e);
+      } else {
+        if (originalDuplicateCallback) {
+          return originalDuplicateCallback.call(this, workspace, e);
+        }
+        return false;
+      }
+    };
+  }
+  
+  // ============================================
   // STEP 6: Add G-drag support for multiple blocks
   // ============================================
   // Track last mouse position globally for G-drag
@@ -261,9 +676,67 @@ function code(block) {
     }
     
     // Filter valid movable blocks
-    const blocksToDrag = multi.filter(b => 
+    let blocksToDrag = multi.filter(b => 
       b && b.workspace && !b.disposed && b.isMovable && b.isMovable()
     );
+    
+    // Find top-level blocks: blocks without parents, or blocks whose parents are NOT in selection
+    // For blocks with parents NOT in selection, we'll disconnect them first
+    const blocksToDisconnect = [];
+    blocksToDrag = blocksToDrag.filter(block => {
+      const parent = block.getParent && block.getParent();
+      if (!parent) return true; // Top-level block, include it
+      
+      // Check if parent is also in the selection
+      const parentInSelection = multi.indexOf(parent) !== -1;
+      if (parentInSelection) {
+        // Parent is selected, so skip this child (parent will move it)
+        return false;
+      }
+      
+      // Parent is NOT in selection, so we need to disconnect this block
+      blocksToDisconnect.push(block);
+      return true;
+    });
+    
+    // Disconnect blocks from their parents before dragging
+    if (blocksToDisconnect.length > 0) {
+      const wasGrouped = Blockly.Events.getGroup();
+      const eventsWereEnabled = Blockly.Events.isEnabled();
+      Blockly.Events.setGroup(true);
+      if (!eventsWereEnabled) {
+        Blockly.Events.enable();
+      }
+      
+      try {
+        blocksToDisconnect.forEach(block => {
+          if (block && block.workspace && !block.disposed) {
+            try {
+              // Disconnect from parent (don't heal stack)
+              if (typeof block.unplug === 'function') {
+                block.unplug(false);
+              } else {
+                // Fallback: disconnect the connection directly
+                const prevConn = block.previousConnection;
+                const outputConn = block.outputConnection;
+                if (prevConn && prevConn.targetConnection) {
+                  prevConn.disconnect();
+                } else if (outputConn && outputConn.targetConnection) {
+                  outputConn.disconnect();
+                }
+              }
+            } catch (err) {
+              console.warn('[Multi-Select] Error disconnecting block:', err);
+            }
+          }
+        });
+      } finally {
+        Blockly.Events.setGroup(wasGrouped);
+        if (!eventsWereEnabled) {
+          Blockly.Events.disable();
+        }
+      }
+    }
     
     if (blocksToDrag.length < 2) {
       return; // Let grabBlock handle single block
@@ -338,19 +811,43 @@ function code(block) {
       const deltaY = currentMousePos.y - multiDragState.startMousePos.y;
       
       // Move all blocks by the same delta (events disabled during drag)
+      // Only move top-level blocks (blocks without parents)
+      // Children will move automatically with their parent
       multiDragState.blocks.forEach((block, i) => {
         if (!block || !block.workspace || block.disposed) return;
         const startPos = multiDragState.startPositions[i];
         if (!startPos) return;
         
+        // Only move blocks without parents (top-level blocks)
+        // Blocks with parents should have been disconnected before drag started
+        const parent = block.getParent && block.getParent();
+        if (parent) {
+          // If block still has a parent, check if parent is also being dragged
+          if (multiDragState.blocks.indexOf(parent) !== -1) {
+            return; // Skip this child block, parent will handle moving it
+          }
+          // Block has a parent that's not being dragged - this shouldn't happen
+          // but skip it to avoid errors
+          console.warn('[Multi-Select] Block still has parent during drag, skipping:', block.id);
+          return;
+        }
+        
         const newX = startPos.x + deltaX;
         const newY = startPos.y + deltaY;
         
-        if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
-          block.moveTo(new Blockly.utils.Coordinate(newX, newY));
-        } else if (typeof block.moveBy === 'function') {
-          const cur = block.getRelativeToSurfaceXY();
-          block.moveBy(newX - cur.x, newY - cur.y);
+        try {
+          if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+            block.moveTo(new Blockly.utils.Coordinate(newX, newY));
+          } else if (typeof block.moveBy === 'function') {
+            const cur = block.getRelativeToSurfaceXY();
+            block.moveBy(newX - cur.x, newY - cur.y);
+          }
+        } catch (err) {
+          // Suppress "Block has parent" errors - shouldn't happen but handle gracefully
+          const errMsg = String(err.message || err || '');
+          if (!errMsg.includes('parent')) {
+            console.warn('[Multi-Select] Error moving block:', err);
+          }
         }
       });
     };
@@ -407,6 +904,12 @@ function code(block) {
             const startPos = startPositions[i];
             if (!startPos || !block || !block.workspace || block.disposed) return;
             
+            // Skip blocks whose parent is also in the selection (parent will restore them)
+            const parent = block.getParent && block.getParent();
+            if (parent && blocks.indexOf(parent) !== -1) {
+              return; // Skip this child block
+            }
+            
             if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
               block.moveTo(new Blockly.utils.Coordinate(startPos.x, startPos.y));
             } else if (typeof block.getRelativeToSurfaceXY === 'function' && typeof block.moveBy === 'function') {
@@ -430,6 +933,12 @@ function code(block) {
       try {
         blocks.forEach((block, i) => {
           if (!block || !block.workspace || block.disposed) return;
+          
+          // Skip blocks whose parent is also in the selection (parent's event will cover it)
+          const parent = block.getParent && block.getParent();
+          if (parent && blocks.indexOf(parent) !== -1) {
+            return; // Skip this child block
+          }
           
           const startPos = startPositions[i];
           if (!startPos) return;
@@ -624,8 +1133,8 @@ function code(block) {
       
       // Add selected blocks to multi-selection
       if (selectedBlocks.length > 0) {
-        // Clear existing selection if Ctrl/Cmd not held
-        if (!(e.ctrlKey || e.metaKey)) {
+        // Clear existing selection if Shift not held
+        if (!e.shiftKey) {
           window.__multiSelectedBlocks.forEach(block => {
             if (block.removeSelect) block.removeSelect();
           });
@@ -646,6 +1155,9 @@ function code(block) {
         }
         
         console.log(\`[Multi-Select] Box selected \${selectedBlocks.length} blocks\`);
+        
+        // Automatically disable box selection mode after successful selection
+        disableBoxSelectMode();
       }
     }
     
@@ -756,7 +1268,7 @@ function code(block) {
     }
   }, true);
   
-  console.log('%c[Multi-Select] Enabled! Ctrl+Click to select multiple blocks, G to drag multiple, Ctrl+B for box selection', 'color: #00c853; font-weight: bold;');
+  console.log('%c[Multi-Select] Enabled! Shift+Click to select multiple blocks, G to drag multiple, Ctrl+B for box selection, Ctrl+C/V/D for copy/paste/duplicate, X to delete', 'color: #00c853; font-weight: bold;');
   
 })();`;
 }

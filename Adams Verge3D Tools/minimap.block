@@ -127,6 +127,14 @@ function code(block) {
   function initProMinimap(workspace) {
     console.log("%c[Pro Minimap] Initializing for new workspace...", "color:yellow");
 
+    // Override minimum zoom limit to allow zooming out further
+    // Default Blockly minScale is 0.3, we'll allow much lower (e.g., 0.01)
+    if (workspace.options && workspace.options.zoomOptions) {
+      const originalMinScale = workspace.options.zoomOptions.minScale;
+      workspace.options.zoomOptions.minScale = 0.01; // Allow zooming out to 1% of original size
+      console.log(\`[Pro Minimap] Overrode minScale from \${originalMinScale} to 0.01\`);
+    }
+
     const canvas = injectUI();
     const ctx = canvas.getContext('2d');
 
@@ -136,8 +144,83 @@ function code(block) {
     let bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     let viewportRect = { x: 0, y: 0, w: 0, h: 0 };
 
+    // Helper function to check if a block is visible in the workspace
+    // Respects collapsed state - hides children of collapsed blocks
+    function isBlockVisible(block) {
+      if (!block) return false;
+      
+      // Check the actual SVG element's display style (most reliable)
+      // This directly reflects what Blockly sets when hiding blocks
+      try {
+        if (block.rendered && block.getSvgRoot) {
+          const svgRoot = block.getSvgRoot();
+          if (svgRoot) {
+            // Check both inline style and computed style
+            const inlineDisplay = svgRoot.style.display;
+            if (inlineDisplay === 'none') {
+              return false;
+            }
+            
+            // Also check computed style as fallback
+            const computedDisplay = window.getComputedStyle(svgRoot).display;
+            if (computedDisplay === 'none') {
+              return false;
+            }
+          }
+        }
+      } catch (e) {
+        // Fallback to other checks if SVG check fails
+      }
+      
+      // Traverse up the parent chain to check if any ancestor is collapsed
+      let current = block;
+      while (current) {
+        const parent = current.getParent && current.getParent();
+        if (!parent) {
+          // Reached top level, block is visible (if SVG check passed)
+          return true;
+        }
+        
+        // Check if parent is collapsed - this hides all children
+        if (typeof parent.isCollapsed === 'function' && parent.isCollapsed()) {
+          return false; // Parent is collapsed, so this block is hidden
+        }
+        
+        // Check if the parent input that connects to this block is visible
+        const parentInput = parent.getInputWithBlock && parent.getInputWithBlock(current);
+        if (parentInput && typeof parentInput.isVisible === 'function') {
+          if (!parentInput.isVisible()) {
+            return false; // Parent input is hidden (collapsed), so block is hidden
+          }
+        }
+        
+        // Check statement chains (previous/next connections)
+        // If block is connected via previous connection, check if parent's statement input is visible
+        if (current.previousConnection && current.previousConnection.targetBlock) {
+          const targetBlock = current.previousConnection.targetBlock();
+          if (targetBlock === parent) {
+            // This is a statement chain - check if parent has a statement input and if it's visible
+            // When collapsed, statement inputs are hidden
+            const statementInput = parent.getFirstStatementConnection && parent.getFirstStatementConnection();
+            if (statementInput && statementInput.targetBlock) {
+              // Check if the statement input's connection is visible
+              // Actually, we already checked parent.isCollapsed above, so this should be covered
+            }
+          }
+        }
+        
+        // Move up the chain
+        current = parent;
+      }
+      
+      // Default to visible if we can't determine
+      return true;
+    }
+
     function calculateBounds() {
-      const blocks = workspace.getAllBlocks(false);
+      const allBlocks = workspace.getAllBlocks(false);
+      // Filter to only visible blocks
+      const blocks = allBlocks.filter(b => isBlockVisible(b));
       if (blocks.length === 0) { bounds = {minX:0,minY:0,maxX:500,maxY:500}; return; }
       let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
       blocks.forEach(b => {
@@ -152,36 +235,107 @@ function code(block) {
 
     function drawMinimap() {
       calculateBounds();
-      const metrics = workspace.getMetrics();
-      const zoom = workspace.scale;
+      
+      // Get view metrics in workspace coordinates (same coordinate system as blocks)
+      const metricsManager = workspace.getMetricsManager && workspace.getMetricsManager();
+      let viewMetrics;
+      if (metricsManager && typeof metricsManager.getViewMetrics === 'function') {
+        // Get view metrics in workspace coordinates
+        viewMetrics = metricsManager.getViewMetrics(true);
+      } else {
+        // Fallback: use getMetrics and convert from pixel to workspace coordinates
+        const metrics = workspace.getMetrics();
+        const zoom = workspace.scale;
+        viewMetrics = {
+          left: metrics.viewLeft / zoom,
+          top: metrics.viewTop / zoom,
+          width: metrics.viewWidth / zoom,
+          height: metrics.viewHeight / zoom
+        };
+      }
 
       ctx.clearRect(0,0,canvas.width,canvas.height);
 
+      // Only draw visible blocks (matches what's shown in workspace)
       workspace.getAllBlocks(false).forEach(block=>{
+        // Skip blocks that aren't visible (e.g., children of collapsed blocks)
+        if (!isBlockVisible(block)) {
+          return;
+        }
+        
         const pos=block.getRelativeToSurfaceXY();
         const size=block.getHeightWidth();
-        ctx.fillStyle=block.getColour?block.getColour():"#00ffcc";
-        ctx.globalAlpha=0.6;
-        ctx.fillRect((pos.x-bounds.minX)*scale,(pos.y-bounds.minY)*scale,size.width*scale,size.height*scale);
+        
+        // Check if block is collapsed
+        const isCollapsed = typeof block.isCollapsed === 'function' && block.isCollapsed();
+        
+        // Get block color
+        const blockColor = block.getColour ? block.getColour() : "#00ffcc";
+        
+        // Draw collapsed blocks differently
+        if (isCollapsed) {
+          // Collapsed blocks: darker color, dashed border, smaller opacity
+          ctx.fillStyle = blockColor;
+          ctx.globalAlpha = 0.3; // More transparent
+          const x = (pos.x-bounds.minX)*scale;
+          const y = (pos.y-bounds.minY)*scale;
+          const w = size.width*scale;
+          const h = size.height*scale;
+          ctx.fillRect(x, y, w, h);
+          
+          // Draw dashed border to indicate collapsed state
+          ctx.globalAlpha = 0.8;
+          ctx.strokeStyle = blockColor;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]); // Dashed line
+          ctx.strokeRect(x, y, w, h);
+          ctx.setLineDash([]); // Reset to solid
+        } else {
+          // Normal blocks: regular appearance
+          ctx.fillStyle = blockColor;
+          ctx.globalAlpha = 0.6;
+          ctx.fillRect((pos.x-bounds.minX)*scale,(pos.y-bounds.minY)*scale,size.width*scale,size.height*scale);
+        }
       });
 
+      // Draw viewport rectangle in workspace coordinates
       ctx.globalAlpha=1;
       ctx.strokeStyle='#ff4444';
       ctx.lineWidth=2;
-      const vx=(metrics.viewLeft-bounds.minX)*scale;
-      const vy=(metrics.viewTop-bounds.minY)*scale;
-      const vw=(metrics.viewWidth/zoom)*scale;
-      const vh=(metrics.viewHeight/zoom)*scale;
+      const vx=(viewMetrics.left-bounds.minX)*scale;
+      const vy=(viewMetrics.top-bounds.minY)*scale;
+      const vw=viewMetrics.width*scale;
+      const vh=viewMetrics.height*scale;
       viewportRect={x:vx,y:vy,w:vw,h:vh};
       ctx.strokeRect(vx,vy,vw,vh);
     }
 
     function moveTo(mx,my){
-      const metrics=workspace.getMetrics();
-      const zoom=workspace.scale;
-      const tx=(mx/scale)+bounds.minX-(metrics.viewWidth/(2*zoom));
-      const ty=(my/scale)+bounds.minY-(metrics.viewHeight/(2*zoom));
-      workspace.scroll(-tx,-ty);
+      // Get view metrics in workspace coordinates
+      const metricsManager = workspace.getMetricsManager && workspace.getMetricsManager();
+      let viewMetrics;
+      if (metricsManager && typeof metricsManager.getViewMetrics === 'function') {
+        viewMetrics = metricsManager.getViewMetrics(true);
+      } else {
+        const metrics = workspace.getMetrics();
+        const zoom = workspace.scale;
+        viewMetrics = {
+          width: metrics.viewWidth / zoom,
+          height: metrics.viewHeight / zoom
+        };
+      }
+      
+      // Convert minimap click position to workspace coordinates
+      const workspaceX = (mx / scale) + bounds.minX;
+      const workspaceY = (my / scale) + bounds.minY;
+      
+      // Calculate scroll position to center viewport on clicked position
+      const scrollX = workspaceX - (viewMetrics.width / 2);
+      const scrollY = workspaceY - (viewMetrics.height / 2);
+      
+      // Scroll workspace (scroll expects pixel coordinates, so convert back)
+      const zoom = workspace.scale;
+      workspace.scroll(-scrollX * zoom, -scrollY * zoom);
       drawMinimap();
     }
 
