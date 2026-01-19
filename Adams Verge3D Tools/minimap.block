@@ -31,19 +31,98 @@ function code(block) {
     checkWorkspace();
   }
 
-  function injectUI() {
-    // Remove previous minimap if it exists
-    const old = document.getElementById('minimap-container');
-    if (old) old.remove();
+  // Storage key for minimap state
+  const MINIMAP_STORAGE_KEY = '__minimap_state';
+  
+  // Load saved minimap state
+  function loadMinimapState() {
+    try {
+      const saved = localStorage.getItem(MINIMAP_STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.warn('[Minimap] Failed to load saved state:', e);
+    }
+    // Default values
+    return {
+      width: 240,
+      height: 180,
+      left: null,
+      top: null,
+      bottom: 10,
+      right: 10,
+      collapsed: false
+    };
+  }
+  
+  // Save minimap state
+  function saveMinimapState(state) {
+    try {
+      localStorage.setItem(MINIMAP_STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {
+      console.warn('[Minimap] Failed to save state:', e);
+    }
+  }
 
+  function injectUI() {
+    // Save state from previous minimap before removing it
+    const old = document.getElementById('minimap-container');
+    if (old) {
+      const rect = old.getBoundingClientRect();
+      const parent = old.parentElement;
+      const parentRect = parent.getBoundingClientRect();
+      
+      // Calculate position relative to parent
+      const relativeLeft = rect.left - parentRect.left;
+      const relativeTop = rect.top - parentRect.top;
+      
+      // Check if using absolute positioning (left/top) or relative (bottom/right)
+      const computedStyle = window.getComputedStyle(old);
+      const hasLeft = computedStyle.left !== 'auto' && computedStyle.left !== '';
+      const hasTop = computedStyle.top !== 'auto' && computedStyle.top !== '';
+      const hasBottom = computedStyle.bottom !== 'auto' && computedStyle.bottom !== '';
+      const hasRight = computedStyle.right !== 'auto' && computedStyle.right !== '';
+      
+      // Check if collapsed
+      const canvas = old.querySelector('#minimap-canvas');
+      const isCollapsed = canvas && canvas.style.display === 'none';
+      
+      saveMinimapState({
+        width: old.offsetWidth,
+        height: old.offsetHeight,
+        left: hasLeft ? relativeLeft : null,
+        top: hasTop ? relativeTop : null,
+        bottom: hasBottom ? parseFloat(computedStyle.bottom) : null,
+        right: hasRight ? parseFloat(computedStyle.right) : null,
+        collapsed: isCollapsed
+      });
+      
+      old.remove();
+    }
+
+    // Load saved state
+    const savedState = loadMinimapState();
+    const originalWidth = savedState.width || 240;
+    const originalHeight = savedState.height || 180;
+    
+    // Build position styles
+    let positionStyles = '';
+    if (savedState.left !== null && savedState.top !== null) {
+      positionStyles = \`left: \${savedState.left}px; top: \${savedState.top}px; right: auto; bottom: auto;\`;
+    } else {
+      positionStyles = \`bottom: \${savedState.bottom || 10}px; right: \${savedState.right || 10}px; left: auto; top: auto;\`;
+    }
+    
     const container = document.createElement('div');
     container.id = "minimap-container";
     container.style.cssText = \`
       position: absolute;
-      bottom: 10px;
-      right: 10px;
-      width: 240px;
-      height: 180px;
+      \${positionStyles}
+      width: \${originalWidth}px;
+      height: \${savedState.collapsed ? '20px' : originalHeight + 'px'};
+      min-width: 150px;
+      min-height: 50px;
       border: 1px solid #666;
       background: #111;
       opacity: 0.9;
@@ -53,6 +132,7 @@ function code(block) {
       display: flex;
       flex-direction: column;
       user-select: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     \`;
 
     // Top bar for dragging
@@ -73,10 +153,26 @@ function code(block) {
     // Canvas
     const canvas = document.createElement('canvas');
     canvas.id = "minimap-canvas";
-    canvas.width = 240;
-    canvas.height = 160;
+    canvas.width = originalWidth;
+    canvas.height = originalHeight - 20; // Subtract top bar height
     canvas.style.flex = "1";
+    canvas.style.minHeight = "30px";
     container.appendChild(canvas);
+
+    // Resize handle indicator (visual feedback)
+    const resizeHandle = document.createElement('div');
+    resizeHandle.style.cssText = \`
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 20px;
+      height: 20px;
+      background: linear-gradient(-45deg, transparent 30%, #666 30%, #666 35%, transparent 35%, transparent 65%, #666 65%, #666 70%, transparent 70%);
+      cursor: nwse-resize;
+      pointer-events: none;
+      z-index: 1;
+    \`;
+    container.appendChild(resizeHandle);
 
     // Collapse button
     const collapseBtn = document.createElement('div');
@@ -87,39 +183,152 @@ function code(block) {
       right: 5px;
       cursor: pointer;
       font-size: 14px;
+      user-select: none;
+      padding: 2px 4px;
     \`;
+    collapseBtn.onmouseover = () => collapseBtn.style.background = "rgba(255,255,255,0.1)";
+    collapseBtn.onmouseout = () => collapseBtn.style.background = "transparent";
     topBar.appendChild(collapseBtn);
 
     // Add to DOM
     const parent = document.querySelector('#blocklyDiv') || document.body;
     parent.appendChild(container);
 
-    // Collapse logic
-    let collapsed = false;
+    // Store size (use saved state if available)
+    let storedWidth = originalWidth;
+    let storedHeight = originalHeight;
+    
+    // Restore collapsed state if saved
+    let collapsed = savedState.collapsed || false;
+    if (collapsed) {
+      canvas.style.display = 'none';
+      collapseBtn.textContent = "▲";
+    }
+
+    // Function to save current state
+    function saveCurrentState() {
+      const rect = container.getBoundingClientRect();
+      const parent = container.parentElement;
+      const parentRect = parent.getBoundingClientRect();
+      
+      const relativeLeft = rect.left - parentRect.left;
+      const relativeTop = rect.top - parentRect.top;
+      
+      const computedStyle = window.getComputedStyle(container);
+      const hasLeft = computedStyle.left !== 'auto' && computedStyle.left !== '';
+      const hasTop = computedStyle.top !== 'auto' && computedStyle.top !== '';
+      const hasBottom = computedStyle.bottom !== 'auto' && computedStyle.bottom !== '';
+      const hasRight = computedStyle.right !== 'auto' && computedStyle.right !== '';
+      
+      saveMinimapState({
+        width: container.offsetWidth,
+        height: collapsed ? storedHeight : container.offsetHeight,
+        left: hasLeft ? relativeLeft : null,
+        top: hasTop ? relativeTop : null,
+        bottom: hasBottom ? parseFloat(computedStyle.bottom) : null,
+        right: hasRight ? parseFloat(computedStyle.right) : null,
+        collapsed: collapsed
+      });
+    }
+
+    // Collapse/minimize logic
     collapseBtn.onclick = () => {
       collapsed = !collapsed;
-      canvas.style.display = collapsed ? 'none' : 'block';
-      collapseBtn.textContent = collapsed ? "▲" : "▼";
+      if (collapsed) {
+        // Minimize: store current size and hide canvas
+        storedWidth = container.offsetWidth;
+        storedHeight = container.offsetHeight;
+        canvas.style.display = 'none';
+        container.style.height = '20px'; // Only show top bar
+        container.style.width = storedWidth + 'px'; // Keep width
+        collapseBtn.textContent = "▲";
+      } else {
+        // Restore: show canvas and restore size
+        canvas.style.display = 'block';
+        container.style.height = storedHeight + 'px';
+        container.style.width = storedWidth + 'px';
+        collapseBtn.textContent = "▼";
+        // Update canvas size to match container
+        updateCanvasSize();
+      }
+      saveCurrentState();
     };
+
+    // Function to update canvas size when container is resized
+    function updateCanvasSize() {
+      const containerWidth = container.offsetWidth;
+      const containerHeight = container.offsetHeight;
+      canvas.width = containerWidth;
+      canvas.height = Math.max(30, containerHeight - 20); // Subtract top bar height, min 30px
+      // Trigger redraw if minimap draw function is available
+      if (window.__minimapDrawFunction) {
+        window.__minimapDrawFunction();
+      }
+    }
+
+    // Watch for resize events
+    let resizeObserver;
+    let resizeTimeout;
+    if (window.ResizeObserver) {
+      resizeObserver = new ResizeObserver(() => {
+        if (!collapsed) {
+          updateCanvasSize();
+        }
+        // Debounce state saving on resize
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+          saveCurrentState();
+        }, 300);
+      });
+      resizeObserver.observe(container);
+    } else {
+      // Fallback: use interval to check size changes
+      let lastWidth = container.offsetWidth;
+      let lastHeight = container.offsetHeight;
+      setInterval(() => {
+        if (!collapsed && (container.offsetWidth !== lastWidth || container.offsetHeight !== lastHeight)) {
+          lastWidth = container.offsetWidth;
+          lastHeight = container.offsetHeight;
+          updateCanvasSize();
+          saveCurrentState();
+        }
+      }, 100);
+    }
 
     // Dragging the panel
     let drag = false, sx = 0, sy = 0, sl = 0, st = 0;
     topBar.onmousedown = e => {
+      // Don't drag if clicking the collapse button
+      if (e.target === collapseBtn || collapseBtn.contains(e.target)) {
+        return;
+      }
       drag = true;
       sx = e.clientX;
       sy = e.clientY;
-      sl = container.offsetLeft;
-      st = container.offsetTop;
+      const rect = container.getBoundingClientRect();
+      const parent = container.parentElement;
+      const parentRect = parent.getBoundingClientRect();
+      sl = rect.left - parentRect.left;
+      st = rect.top - parentRect.top;
     };
     window.addEventListener('mousemove', e => {
       if (drag) {
-        container.style.left = sl + (e.clientX - sx) + "px";
-        container.style.top = st + (e.clientY - sy) + "px";
+        const parent = container.parentElement;
+        const parentRect = parent.getBoundingClientRect();
+        const newLeft = sl + (e.clientX - sx);
+        const newTop = st + (e.clientY - sy);
+        container.style.left = newLeft + "px";
+        container.style.top = newTop + "px";
         container.style.right = "auto";
         container.style.bottom = "auto";
       }
     });
-    window.addEventListener('mouseup', () => drag = false);
+    window.addEventListener('mouseup', () => {
+      if (drag) {
+        drag = false;
+        saveCurrentState(); // Save position after drag ends
+      }
+    });
 
     return canvas;
   }
@@ -137,6 +346,10 @@ function code(block) {
 
     const canvas = injectUI();
     const ctx = canvas.getContext('2d');
+    
+    // Store canvas reference globally for resize handler
+    window.__minimapCanvas = canvas;
+    window.__minimapDrawFunction = null; // Will be set below
 
     let draggingViewport = false;
     let dragOffsetX = 0, dragOffsetY = 0;
@@ -357,8 +570,11 @@ function code(block) {
       if(!redrawPending){redrawPending=true;requestAnimationFrame(()=>{drawMinimap();redrawPending=false;});}
     });
 
+    // Store draw function globally for resize handler
+    window.__minimapDrawFunction = drawMinimap;
+
     drawMinimap();
-    console.log("%c[Pro Minimap] ✅ Ready for workspace!", "color:lime;font-weight:bold;");
+    console.log("%c[Pro Minimap] ✅ Ready for workspace! (Resizable and minimizable)", "color:lime;font-weight:bold;");
   }
 
   waitForBlockly();
