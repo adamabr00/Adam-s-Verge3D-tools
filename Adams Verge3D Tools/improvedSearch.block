@@ -13,7 +13,7 @@ function code(block) {
             return;
         }
 
-        let searchOverlay = null, searchInput, statusLabel, tabsBar, hintsLabel;
+        let searchOverlay = null, searchInput, statusLabel, tabsBar, hintsLabel, variablesCheckbox, proceduresCheckbox;
         let groupedResults = [], activeTabIndex = 0, currentIndexInTab = 0;
         let lastHighlightedId = null;
         let cachedBlocks = [];
@@ -21,6 +21,8 @@ function code(block) {
         let highlightOverlay = null;
         let temporarilyExpandedBlocks = new Map(); // Track temporarily expanded blocks: blockId -> wasCollapsed
         let currentCollapsedParentId = null; // Track current collapsed parent being viewed
+        let variablesFilterEnabled = false; // Track Variables filter state
+        let proceduresFilterEnabled = false; // Track Procedures filter state
         const DEBOUNCE_DELAY = 250; // milliseconds - wait 250ms after user stops typing
         const TAB_SWITCH_DELAY = 10; // Delay for tab switching to complete
         const EXPAND_RENDER_DELAY = 50; // Delay for block expansion to render
@@ -77,7 +79,20 @@ function code(block) {
             groupedResults = [];
 
             allTabs.forEach(tab => {
-                const matches = cachedBlocks.filter(b => b.tabIndex === tab.tabIndex && normalize(b.text).includes(nq));
+                let matches = cachedBlocks.filter(b => b.tabIndex === tab.tabIndex && normalize(b.text).includes(nq));
+                
+                // Apply filters if enabled (OR logic: if both checked, show both types)
+                if (variablesFilterEnabled || proceduresFilterEnabled) {
+                    const allowedTypes = [];
+                    if (variablesFilterEnabled) {
+                        allowedTypes.push('variables_set', 'variables_get');
+                    }
+                    if (proceduresFilterEnabled) {
+                        allowedTypes.push('procedures_defnoreturn', 'procedures_defreturn', 'procedures_callnoreturn', 'procedures_callreturn');
+                    }
+                    matches = matches.filter(b => allowedTypes.includes(b.type));
+                }
+                
                 if (matches.length) groupedResults.push({ tabName: tab.tabName, tabIndex: tab.tabIndex, results: matches });
             });
 
@@ -155,6 +170,94 @@ function code(block) {
             searchInput.type = 'text';
             searchInput.placeholder = 'Search puzzles...';
             searchInput.value = initialQuery;
+
+            // Create filter container with Variables and Procedures checkboxes (minimal style)
+            const filterContainer = document.createElement('div');
+            Object.assign(filterContainer.style, {
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                marginBottom: '10px',
+                padding: '0',
+                flexWrap: 'wrap'
+            });
+
+            // Variables checkbox
+            variablesCheckbox = document.createElement('input');
+            variablesCheckbox.type = 'checkbox';
+            variablesCheckbox.id = 'variablesFilter';
+            variablesCheckbox.checked = variablesFilterEnabled;
+            Object.assign(variablesCheckbox.style, {
+                width: '14px',
+                height: '14px',
+                cursor: 'pointer',
+                accentColor: '#5b8cff',
+                margin: '0'
+            });
+
+            const variablesLabel = document.createElement('label');
+            variablesLabel.htmlFor = 'variablesFilter';
+            variablesLabel.textContent = 'Variables';
+            Object.assign(variablesLabel.style, {
+                fontSize: '12px',
+                color: '#94a3b8',
+                cursor: 'pointer',
+                userSelect: 'none',
+                fontWeight: '400',
+                margin: '0',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+            });
+
+            // Add event listener to Variables checkbox
+            variablesCheckbox.addEventListener('change', () => {
+                variablesFilterEnabled = variablesCheckbox.checked;
+                doSearch(); // Trigger search when filter changes
+                // Restore focus to search input so arrow keys work immediately
+                setTimeout(() => searchInput.focus(), 0);
+            });
+
+            // Procedures checkbox
+            proceduresCheckbox = document.createElement('input');
+            proceduresCheckbox.type = 'checkbox';
+            proceduresCheckbox.id = 'proceduresFilter';
+            proceduresCheckbox.checked = proceduresFilterEnabled;
+            Object.assign(proceduresCheckbox.style, {
+                width: '14px',
+                height: '14px',
+                cursor: 'pointer',
+                accentColor: '#5b8cff',
+                margin: '0'
+            });
+
+            const proceduresLabel = document.createElement('label');
+            proceduresLabel.htmlFor = 'proceduresFilter';
+            proceduresLabel.textContent = 'Procedures';
+            Object.assign(proceduresLabel.style, {
+                fontSize: '12px',
+                color: '#94a3b8',
+                cursor: 'pointer',
+                userSelect: 'none',
+                fontWeight: '400',
+                margin: '0',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+            });
+
+            // Add event listener to Procedures checkbox
+            proceduresCheckbox.addEventListener('change', () => {
+                proceduresFilterEnabled = proceduresCheckbox.checked;
+                doSearch(); // Trigger search when filter changes
+                // Restore focus to search input so arrow keys work immediately
+                setTimeout(() => searchInput.focus(), 0);
+            });
+
+            filterContainer.appendChild(variablesCheckbox);
+            filterContainer.appendChild(variablesLabel);
+            filterContainer.appendChild(proceduresCheckbox);
+            filterContainer.appendChild(proceduresLabel);
 
             // Create tabs bar with modern styling
             tabsBar = document.createElement('div');
@@ -260,6 +363,7 @@ function code(block) {
             searchOverlay.appendChild(closeBtn);
             searchOverlay.appendChild(header);
             searchOverlay.appendChild(fieldContainer);
+            searchOverlay.appendChild(filterContainer);
             searchOverlay.appendChild(tabsBar);
             searchOverlay.appendChild(statusLabel);
             searchOverlay.appendChild(hintsLabel);
@@ -671,6 +775,10 @@ function code(block) {
                 // Restore all temporarily expanded blocks
                 restoreAllCollapsedStates();
                 
+                // Reset filter state
+                variablesFilterEnabled = false;
+                proceduresFilterEnabled = false;
+                
                 searchOverlay.remove(); searchOverlay = null;
                 groupedResults = [];
                 if (lastHighlightedId) { 
@@ -694,6 +802,60 @@ function code(block) {
                   : console.warn("[Search] Selected block not found in cache.");
         };
 
+        // 🔹 Process selected block and print searchable text
+        function printSelectedBlockSearchableText() {
+            if (!Blockly.selected) {
+                console.warn("[Search] No block selected.");
+                return;
+            }
+
+            const block = Blockly.selected;
+            const ws = Blockly.getMainWorkspace();
+            if (!ws) {
+                console.warn("[Search] No workspace available.");
+                return;
+            }
+
+            try {
+                // Convert block to XML
+                const xml = Blockly.Xml.blockToDom(block);
+                const xmlString = Blockly.Xml.domToText(xml);
+                
+                // Parse XML
+                const parser = new DOMParser();
+                const dom = parser.parseFromString(xmlString, 'application/xml');
+                const blockElement = dom.documentElement;
+
+                // Process block using the same logic as processBlock()
+                const type = blockElement.getAttribute('type') || '';
+                const children = Array.from(blockElement.children || []);
+
+                // Direct <field> only
+                const fields = children
+                    .filter(el => el.tagName === 'field')
+                    .map(f => f.textContent.trim().toLowerCase())
+                    .join(' ');
+
+                // Mutation name (for procedure calls etc.)
+                const mutation = children.find(el => el.tagName === 'mutation');
+                const mutationName = mutation?.getAttribute('name')?.toLowerCase() || '';
+
+                // Block text = type + fields + mutation.name only
+                const ownText = [type, fields, mutationName].filter(Boolean).join(' ');
+
+                // Print results
+                console.log('%c[Search] Selected Block Searchable Text:', 'color: #5b8cff; font-weight: bold; font-size: 14px;');
+                console.log('Type:', type);
+                console.log('Fields:', fields || '(none)');
+                console.log('Mutation Name:', mutationName || '(none)');
+                console.log('Combined Searchable Text:', ownText);
+                console.log('Normalized:', normalize(ownText));
+                console.log('Block ID:', block.id);
+            } catch (e) {
+                console.error("[Search] Error processing selected block:", e);
+            }
+        }
+
         function getCleanBlockQuery(block) {
             return block?.type?.toLowerCase() || "";
         }
@@ -707,6 +869,12 @@ function code(block) {
 
             if (!isTyping && e.shiftKey && e.key.toLowerCase() === 'f') {
                 toggleSearchUI(Blockly.selected ? getCleanBlockQuery(Blockly.selected) : "");
+                e.preventDefault();
+            }
+
+            // Print selected block's searchable text (Shift+P for Debug)
+            if (!isTyping && e.shiftKey && e.key.toLowerCase() === 'p') {
+                printSelectedBlockSearchableText();
                 e.preventDefault();
             }
 
