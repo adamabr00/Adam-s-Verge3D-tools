@@ -340,7 +340,7 @@ Optional **horizontal icon bar** for common actions (add menu, local view, math,
 
 
 
-![FloatingToolbar](https://github.com/user-attachments/assets/PLACEHOLDER_FLOATING_TOOLBAR_GIF)
+![FloatingToolbar](https://github.com/adamabr00/Adam-s-Verge3D-tools/blob/main/Gifs/floatingToolbar.jpg?raw=true)
 
 
 
