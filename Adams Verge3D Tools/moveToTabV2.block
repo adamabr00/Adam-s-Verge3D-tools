@@ -402,6 +402,21 @@ function code(block) {
             });
     }
 
+    /** Verge3D / some builds may not expose Blockly.common — avoid throwing on Blockly.common access. */
+    function getSelectedBlockCompat() {
+        var one = null;
+        try {
+            if (typeof Blockly !== 'undefined' && Blockly.common && typeof Blockly.common.getSelected === 'function') {
+                one = Blockly.common.getSelected();
+            } else if (typeof Blockly !== 'undefined' && Blockly.selected) {
+                one = Blockly.selected;
+            }
+        } catch (eSel) {
+            one = null;
+        }
+        return one;
+    }
+
     function getMovableSelection(ws) {
         var multi = window.__multiSelectedBlocks || [];
         var selectedBlocks = [];
@@ -413,7 +428,7 @@ function code(block) {
                 }
             }
         } else {
-            var one = Blockly.common.getSelected && Blockly.common.getSelected();
+            var one = getSelectedBlockCompat();
             if (one && one.workspace === ws && !one.disposed) {
                 selectedBlocks.push(one);
             }
@@ -421,6 +436,32 @@ function code(block) {
         return selectedBlocks.filter(function(b) {
             return b && (!b.isMovable || b.isMovable());
         });
+    }
+
+    /**
+     * Same eligibility as adamMoveProcedureFourStepV2 inner procPlan (named defs only, not proxies).
+     * Used to branch: four-step only when this is non-empty AND retarget API exists; otherwise cut-paste.
+     * Previously we used hasRealProcDef = roots.some(proc type) which could be true while procPlan stayed
+     * empty (empty NAME, etc.), so four-step aborted with false and non-procedure moves never fell back.
+     */
+    function computeProcPlanForRoots(roots) {
+        var procPlan = [];
+        for (var ri = 0; ri < roots.length; ri++) {
+            var rb = roots[ri];
+            if (!rb || rb.disposed || rb.isProxyProcDefBlock_) continue;
+            if (rb.type !== 'procedures_defnoreturn' && rb.type !== 'procedures_defreturn') continue;
+            var d0 = rb.getProcedureDef && rb.getProcedureDef();
+            var oldNm = d0 && d0[0] != null && d0[0] !== '' ? d0[0] : null;
+            if (!oldNm && rb.getFieldValue) {
+                try {
+                    var fvs = rb.getFieldValue('NAME');
+                    if (fvs != null && String(fvs).trim() !== '') oldNm = fvs;
+                } catch (eOn) { /* */ }
+            }
+            if (oldNm == null || String(oldNm).trim() === '') continue;
+            procPlan.push({ rootIndex: ri, oldName: String(oldNm), defType: rb.type });
+        }
+        return procPlan;
     }
 
     function filterBlocksNotUnderSelectedAncestor(blocks) {
@@ -1165,10 +1206,13 @@ function code(block) {
         });
         return Promise.resolve()
             .then(function() {
-                traceMoveV2('cutPaste:1-ensure-dest-tab');
+                traceMoveV2('cutPaste:1-ensure-dest-exists');
                 var existing = refreshTabsFromXml().some(function(t) { return t.name === destName; });
                 if (existing) {
-                    return switchToTabNamed(destName);
+                    /* Stay on the source tab — do not switch to dest yet. Switching first swaps the main
+                       Blockly workspace in Verge3D so getBlockById(rootIds) runs on the wrong workspace
+                       and the cut list is empty (non-procedure moves appeared to do nothing). */
+                    return Promise.resolve();
                 }
                 if (options.createIfMissing) {
                     return createTabWithName(destName);
@@ -1176,10 +1220,16 @@ function code(block) {
                 return Promise.reject(new Error('Tab does not exist'));
             })
             .then(function() {
+                return waitForMainWorkspaceStable();
+            })
+            .then(function() {
                 traceMoveV2('cutPaste:2-switch-to-source-cut');
                 if (sourceTabIndex >= 0) {
                     clickTabByIndexIfNeeded(sourceTabIndex);
                 }
+                return waitForMainWorkspaceStable();
+            })
+            .then(function() {
                 var srcWs = Blockly.getMainWorkspace();
                 if (!srcWs) throw new Error('No workspace after switching back to source');
                 beginMoveProcedureBridge(movedProcNamesForBridge);
@@ -1187,7 +1237,18 @@ function code(block) {
                 var toDel = rootIds.map(function(id) {
                     return srcWs.getBlockById(id);
                 }).filter(function(b) { return b && b.workspace === srcWs && !b.disposed; });
-                traceMoveV2('cutPaste:2-delete-on-source', { count: toDel.length });
+                traceMoveV2('cutPaste:2-delete-on-source', {
+                    count: toDel.length,
+                    expectedRoots: rootIds.length
+                });
+                if (toDel.length === 0 && rootIds.length > 0) {
+                    window.__adamMoveProcedureCutPhase = false;
+                    endMoveProcedureBridge();
+                    throw new Error(
+                        'MoveToTabV2: could not find selected blocks on the source tab after tab focus. ' +
+                        'If this persists, try again after the tab strip finishes switching.'
+                    );
+                }
                 deleteBlocksWithSuppression(toDel);
 
                 return switchToTabNamed(destName)
@@ -1333,13 +1394,17 @@ function code(block) {
             }
         }
 
-        var hasRealProcDef = roots.some(function(b) {
-            return b && (b.type === 'procedures_defnoreturn' || b.type === 'procedures_defreturn') && !b.isProxyProcDefBlock_;
+        var procPlanForBranch = computeProcPlanForRoots(roots);
+        var useProcedureFourStep = procPlanForBranch.length > 0 &&
+            typeof window.__adamEnsureProcedureRetargetApi === 'function';
+
+        traceMoveV2('move:branch', {
+            path: useProcedureFourStep ? 'procedure-four-step' : 'cut-paste-path',
+            procPlanLen: procPlanForBranch.length,
+            hasRetargetApi: typeof window.__adamEnsureProcedureRetargetApi === 'function'
         });
 
-        traceMoveV2('move:branch', hasRealProcDef ? 'procedure-four-step' : 'cut-paste-path');
-
-        if (hasRealProcDef) {
+        if (useProcedureFourStep) {
             return adamMoveProcedureFourStepV2(destName, options, roots, rootIds, sourceTabIndex, xmlWrap, idSet);
         }
         return adamMoveCutPastePathV2(destName, options, roots, rootIds, sourceTabIndex, movedProcNamesForBridge, callerBackup, xmlWrap, idSet);
