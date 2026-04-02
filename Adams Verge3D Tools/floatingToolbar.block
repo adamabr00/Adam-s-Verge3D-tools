@@ -1,0 +1,460 @@
+<template color="#0284B1" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Optional draggable horizontal icon bar: Add block (Shift+A), Local view (Shift+H), Math (Shift+C), Minimap, Improved search (Shift+F), layout Align / Space. Drag the grip to move; position is remembered per app URL via the browser (localStorage), not inside the .blend / puzzle file. Requires ?logic. Chain after other Adam puzzles in Master.">
+    <dummy>
+        <label>Floating toolbar</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function() {
+  var params = new URLSearchParams(window.location.search);
+  if (!params.has('logic')) {
+    console.log('[Floating toolbar] Skipped: no ?logic param.');
+    return;
+  }
+  if (window.__adamFloatingToolbarInstalled) {
+    console.log('[Floating toolbar] Already installed.');
+    return;
+  }
+  window.__adamFloatingToolbarInstalled = true;
+
+  // Persist bar position per page (origin + path). Not embedded in Visual Logic XML — browser localStorage only.
+  var STORAGE_KEY_POS = (function () {
+    var s = String(location.origin || '') + String(location.pathname || '/');
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) {
+      h = ((h << 5) + h) + s.charCodeAt(i);
+      h = h | 0;
+    }
+    return 'adamFloatingToolbar_pos_v1_' + (h >>> 0).toString(16);
+  })();
+
+  function loadFloatingToolbarPosition() {
+    try {
+      if (!window.localStorage) return;
+      var raw = localStorage.getItem(STORAGE_KEY_POS);
+      if (!raw) return;
+      var data = JSON.parse(raw);
+      if (typeof data.left !== 'number' || typeof data.top !== 'number') return;
+      if (!isFinite(data.left) || !isFinite(data.top)) return;
+      bar.style.bottom = 'auto';
+      bar.style.right = 'auto';
+      bar.style.left = data.left + 'px';
+      bar.style.top = data.top + 'px';
+      clampBarPosition();
+    } catch (err) {}
+  }
+
+  function saveFloatingToolbarPosition() {
+    try {
+      if (!window.localStorage) return;
+      var l = parseFloat(bar.style.left);
+      var t = parseFloat(bar.style.top);
+      if (!isFinite(l) || !isFinite(t)) return;
+      localStorage.setItem(STORAGE_KEY_POS, JSON.stringify({ left: l, top: t }));
+    } catch (err) {}
+  }
+
+  var MINIMAP_SVG_VISIBLE =
+    '<path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>';
+  var MINIMAP_SVG_HIDDEN =
+    '<g opacity="0.45">' +
+    '<path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>' +
+    '</g>' +
+    '<line x1="2" y1="2" x2="22" y2="22" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>';
+
+  function warnMissing(toolName) {
+    console.warn('[Floating toolbar] ' + toolName + ' is not loaded. Add the matching puzzle or check load order.');
+  }
+
+  function callFn(name, fn) {
+    if (typeof fn === 'function') {
+      try {
+        var r = fn();
+        if (r && typeof r.then === 'function') {
+          r.catch(function(err) { console.error('[Floating toolbar]', name, err); });
+        }
+      } catch (err) {
+        console.error('[Floating toolbar]', name, err);
+      }
+    } else {
+      warnMissing(name);
+    }
+  }
+
+  function getSelectedBlockCount() {
+    var multi = window.__multiSelectedBlocks;
+    if (Array.isArray(multi)) {
+      var n = 0;
+      for (var i = 0; i < multi.length; i++) {
+        if (multi[i]) n++;
+      }
+      return n;
+    }
+    if (typeof Blockly !== 'undefined' && Blockly.selected) return 1;
+    return 0;
+  }
+
+  function getMinimapVisibilityState() {
+    var el = document.getElementById('minimap-container');
+    if (!el) return 'absent';
+    var d = el.style.display;
+    if (d === 'none') return 'hidden';
+    if (d === 'flex' || d === 'block') return 'visible';
+    var cs = window.getComputedStyle(el);
+    return cs.display === 'none' ? 'hidden' : 'visible';
+  }
+
+  function applyDisabled(btn, dis, enabledTitle, disabledHint) {
+    if (!btn) return;
+    btn.disabled = !!dis;
+    var hint = disabledHint || 'unavailable';
+    btn.title = dis ? (enabledTitle + ' — ' + hint) : enabledTitle;
+    btn.setAttribute('aria-label', btn.title);
+    btn.style.opacity = dis ? '0.42' : '1';
+    btn.style.cursor = dis ? 'not-allowed' : 'pointer';
+  }
+
+  function setMinimapIcon(btn, state) {
+    if (!btn) return;
+    var svg = btn.querySelector('svg');
+    if (!svg) return;
+    var inner = state === 'visible' ? MINIMAP_SVG_VISIBLE : MINIMAP_SVG_HIDDEN;
+    svg.innerHTML = inner;
+    var baseTitle = 'Toggle minimap';
+    if (state === 'visible') {
+      btn.title = baseTitle + ' (visible)';
+      btn.setAttribute('aria-label', baseTitle + ', minimap is visible');
+    } else if (state === 'hidden') {
+      btn.title = baseTitle + ' (hidden)';
+      btn.setAttribute('aria-label', baseTitle + ', minimap is hidden');
+    } else {
+      btn.title = baseTitle + ' (minimap puzzle not loaded)';
+      btn.setAttribute('aria-label', baseTitle + ', add Minimap puzzle to enable');
+    }
+  }
+
+  var bar = document.createElement('div');
+  bar.id = 'adam-floating-toolbar';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', "Adam's editor tools");
+  bar.style.cssText = [
+    'position:fixed',
+    'left:12px',
+    'bottom:12px',
+    'top:auto',
+    'right:auto',
+    'z-index:10020',
+    'display:flex',
+    'flex-direction:row',
+    'align-items:center',
+    'gap:6px',
+    'padding:8px',
+    'background:rgba(28,28,32,0.88)',
+    'border:1px solid rgba(120,120,130,0.5)',
+    'border-radius:10px',
+    'box-shadow:0 4px 14px rgba(0,0,0,0.35)',
+    'font-family:system-ui,-apple-system,Segoe UI,sans-serif',
+    'user-select:none'
+  ].join(';');
+
+  var handle = document.createElement('div');
+  handle.setAttribute('role', 'button');
+  handle.setAttribute('aria-label', 'Drag to move toolbar');
+  handle.title = 'Drag to move toolbar';
+  handle.style.cssText = [
+    'flex-shrink:0',
+    'width:14px',
+    'height:36px',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'cursor:grab',
+    'border-radius:6px',
+    'color:#888',
+    'margin:0 2px 0 0'
+  ].join(';');
+  handle.innerHTML =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="20" viewBox="0 0 12 20" aria-hidden="true">' +
+    '<circle cx="3" cy="4" r="1.5" fill="currentColor"/><circle cx="9" cy="4" r="1.5" fill="currentColor"/>' +
+    '<circle cx="3" cy="10" r="1.5" fill="currentColor"/><circle cx="9" cy="10" r="1.5" fill="currentColor"/>' +
+    '<circle cx="3" cy="16" r="1.5" fill="currentColor"/><circle cx="9" cy="16" r="1.5" fill="currentColor"/>' +
+    '</svg>';
+
+  var dragging = false;
+  var dragStartX = 0;
+  var dragStartY = 0;
+  var dragOriginLeft = 0;
+  var dragOriginTop = 0;
+
+  function clampBarPosition() {
+    var w = bar.offsetWidth;
+    var h = bar.offsetHeight;
+    var maxL = Math.max(8, window.innerWidth - w - 8);
+    var maxT = Math.max(8, window.innerHeight - h - 8);
+    var l = parseFloat(bar.style.left) || 0;
+    var t = parseFloat(bar.style.top) || 0;
+    bar.style.left = Math.min(maxL, Math.max(8, l)) + 'px';
+    bar.style.top = Math.min(maxT, Math.max(8, t)) + 'px';
+  }
+
+  function onMove(e) {
+    if (!dragging) return;
+    var nx = dragOriginLeft + (e.clientX - dragStartX);
+    var ny = dragOriginTop + (e.clientY - dragStartY);
+    var w = bar.offsetWidth;
+    var h = bar.offsetHeight;
+    var maxL = Math.max(8, window.innerWidth - w - 8);
+    var maxT = Math.max(8, window.innerHeight - h - 8);
+    bar.style.left = Math.min(maxL, Math.max(8, nx)) + 'px';
+    bar.style.top = Math.min(maxT, Math.max(8, ny)) + 'px';
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    handle.style.cursor = 'grab';
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    saveFloatingToolbarPosition();
+  }
+
+  handle.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    var rect = bar.getBoundingClientRect();
+    bar.style.bottom = 'auto';
+    bar.style.right = 'auto';
+    bar.style.left = rect.left + 'px';
+    bar.style.top = rect.top + 'px';
+    dragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragOriginLeft = rect.left;
+    dragOriginTop = rect.top;
+    handle.style.cursor = 'grabbing';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+
+  window.addEventListener('resize', function() {
+    clampBarPosition();
+  });
+
+  function makeBtn(label, svgInner) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.style.cssText = [
+      'width:40px',
+      'height:40px',
+      'margin:0',
+      'padding:0',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'box-sizing:border-box',
+      'background:rgba(55,55,62,0.95)',
+      'border:1px solid #5a5a66',
+      'border-radius:8px',
+      'cursor:pointer',
+      'color:#eee',
+      'flex-shrink:0',
+      'transition:background 0.15s ease,border-color 0.15s ease,opacity 0.15s ease'
+    ].join(';');
+    btn.innerHTML =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      svgInner +
+      '</svg>';
+    btn.addEventListener('mouseenter', function() {
+      if (btn.disabled) return;
+      btn.style.background = 'rgba(78,78,88,0.98)';
+      btn.style.borderColor = '#8a8a98';
+    });
+    btn.addEventListener('mouseleave', function() {
+      if (btn.disabled) return;
+      btn.style.background = 'rgba(55,55,62,0.95)';
+      btn.style.borderColor = '#5a5a66';
+    });
+    return btn;
+  }
+
+  function makeMathBtn(label) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.style.cssText = [
+      'width:40px',
+      'height:40px',
+      'margin:0',
+      'padding:0',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'box-sizing:border-box',
+      'background:rgba(55,55,62,0.95)',
+      'border:1px solid #5a5a66',
+      'border-radius:8px',
+      'cursor:pointer',
+      'color:#eee',
+      'flex-shrink:0',
+      'transition:background 0.15s ease,border-color 0.15s ease,opacity 0.15s ease'
+    ].join(';');
+    btn.innerHTML =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<text x="1" y="16" font-size="13" fill="currentColor" font-family="Cambria Math, Times New Roman, serif" stroke="none">∫</text>' +
+      '<text x="9" y="16" font-size="11" fill="currentColor" font-family="Cambria Math, Times New Roman, serif" stroke="none">∑</text>' +
+      '<text x="16" y="16" font-size="10" fill="currentColor" font-family="Cambria Math, Times New Roman, serif" stroke="none">π</text>' +
+      '</svg>';
+    btn.addEventListener('mouseenter', function() {
+      if (btn.disabled) return;
+      btn.style.background = 'rgba(78,78,88,0.98)';
+      btn.style.borderColor = '#8a8a98';
+    });
+    btn.addEventListener('mouseleave', function() {
+      if (btn.disabled) return;
+      btn.style.background = 'rgba(55,55,62,0.95)';
+      btn.style.borderColor = '#5a5a66';
+    });
+    return btn;
+  }
+
+  var btnLocal = null;
+  var btnAlign = null;
+  var btnSpace = null;
+  var btnMinimap = null;
+
+  var LABEL_LOCAL = 'Local view (Shift+H)';
+  var LABEL_ALIGN = 'Layout align (Shift+Q preview)';
+  var LABEL_SPACE = 'Layout spacing (Shift+E preview)';
+
+  function updateToolbarState() {
+    tryAttachBlocklyListener();
+    var n = getSelectedBlockCount();
+    applyDisabled(btnLocal, n < 1, LABEL_LOCAL, 'select at least one block');
+    applyDisabled(btnAlign, n < 2, LABEL_ALIGN, 'select at least two blocks');
+    applyDisabled(btnSpace, n < 2, LABEL_SPACE, 'select at least two blocks');
+
+    var mv = getMinimapVisibilityState();
+    if (btnMinimap) {
+      if (mv === 'visible') {
+        setMinimapIcon(btnMinimap, 'visible');
+      } else if (mv === 'hidden') {
+        setMinimapIcon(btnMinimap, 'hidden');
+      } else {
+        setMinimapIcon(btnMinimap, 'absent');
+      }
+      btnMinimap.style.opacity = '1';
+      btnMinimap.disabled = false;
+      btnMinimap.style.cursor = 'pointer';
+    }
+  }
+
+  var rows = [
+    {
+      key: 'add',
+      label: 'Add block search (Shift+A)',
+      svg: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+      run: function() { callFn('Add menu (addMenuBlock)', window.__adamOpenAddMenu); },
+      kind: 'stroke'
+    },
+    {
+      key: 'local',
+      label: LABEL_LOCAL,
+      svg: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+      run: function() {
+        if (getSelectedBlockCount() < 1) return;
+        callFn('Local view (localView)', window.__adamToggleLocalView);
+      },
+      kind: 'stroke'
+    },
+    {
+      key: 'math',
+      label: 'Math expression (Shift+C)',
+      svg: '',
+      run: function() { callFn('Math expression (mathExpression)', window.__adamOpenMathExpression); },
+      kind: 'math'
+    },
+    {
+      key: 'minimap',
+      label: 'Toggle minimap',
+      svg: MINIMAP_SVG_VISIBLE,
+      run: function() {
+        callFn('Minimap (minimap)', window.__adamToggleMinimap);
+        setTimeout(updateToolbarState, 0);
+      },
+      kind: 'stroke'
+    },
+    {
+      key: 'search',
+      label: 'Improved search (Shift+F)',
+      svg: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
+      run: function() { callFn('Improved search (improvedSearch)', window.__adamToggleImprovedSearch); },
+      kind: 'stroke'
+    },
+    {
+      key: 'align',
+      label: LABEL_ALIGN,
+      svg: '<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h14"/>',
+      run: function() {
+        if (getSelectedBlockCount() < 2) return;
+        callFn('Multi-select align (multiSelect)', window.__multiSelectEnterLayoutAlign);
+      },
+      kind: 'stroke'
+    },
+    {
+      key: 'space',
+      label: LABEL_SPACE,
+      svg: '<path d="M5 9h14"/><path d="M5 15h14"/><path d="M9 5v3M9 16v3M15 5v3M15 16v3"/>',
+      run: function() {
+        if (getSelectedBlockCount() < 2) return;
+        callFn('Multi-select spacing (multiSelect)', window.__multiSelectEnterLayoutSpace);
+      },
+      kind: 'stroke'
+    }
+  ];
+
+  bar.appendChild(handle);
+
+  rows.forEach(function(row) {
+    var b = row.kind === 'math' ? makeMathBtn(row.label) : makeBtn(row.label, row.svg);
+    if (row.key === 'local') btnLocal = b;
+    if (row.key === 'align') btnAlign = b;
+    if (row.key === 'space') btnSpace = b;
+    if (row.key === 'minimap') btnMinimap = b;
+    b.addEventListener('click', function(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (b.disabled) return;
+      row.run();
+    });
+    bar.appendChild(b);
+  });
+
+  document.body.appendChild(bar);
+  loadFloatingToolbarPosition();
+
+  updateToolbarState();
+  var stateTimer = setInterval(updateToolbarState, 200);
+  window.addEventListener('beforeunload', function() {
+    clearInterval(stateTimer);
+  });
+
+  var wsListenerAttached = false;
+  function tryAttachBlocklyListener() {
+    if (wsListenerAttached) return;
+    if (typeof Blockly === 'undefined' || !Blockly.getMainWorkspace) return;
+    var ws = Blockly.getMainWorkspace();
+    if (!ws || !ws.addChangeListener) return;
+    wsListenerAttached = true;
+    ws.addChangeListener(function() {
+      updateToolbarState();
+    });
+  }
+  console.log('%c[Floating toolbar] Ready (horizontal, draggable).', 'color:#0284B1;font-weight:bold;');
+})();
+`;
+}
+</script>

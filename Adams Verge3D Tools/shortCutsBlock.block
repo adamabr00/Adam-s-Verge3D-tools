@@ -1,4 +1,4 @@
-<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts to the Puzzles editor: X for delete, Shift+D for duplicate, M for disable/enable, C for collapse/expand blocks.">
+<template color="#020024" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts to the Puzzles editor: X for delete, Shift+D for duplicate (multiple top-level stacks when Enable Multi-Selection is on), M for disable/enable, C for collapse/expand blocks.">
     <dummy>
         <label>Keyboard Shortcuts (X, Shift+D, M, C)</label>
     </dummy>
@@ -27,10 +27,13 @@ function code(block) {
       registry.unregister('duplicate_block');
   }
 
-  // Register Shift+D for duplication
+  // Register Shift+D for duplication (multi-select: 2+ root stacks via multiSelect.block)
   registry.register({
     name: 'duplicate_block',
     callback: function() {
+      if (typeof window.__multiSelectDuplicateRoots === 'function' && window.__multiSelectDuplicateRoots()) {
+        return true;
+      }
       const block = Blockly.selected;
       if (block) {
         duplicateEntry.callback({ block: block, workspace: Blockly.getMainWorkspace() });

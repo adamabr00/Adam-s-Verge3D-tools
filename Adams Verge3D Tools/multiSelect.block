@@ -1,0 +1,1762 @@
+<template color="#036AA6" prev="true" next="true" 
+  tooltip="Enable multi-selection: Shift+Click, Shift+drag / Ctrl+B box select, G multi-drag, X delete. With Keyboard Shortcuts: Shift+D duplicates 2+ top-level stacks at once. Ctrl+Q/Shift+Q align preview; Ctrl+E/Shift+E spacing; Esc cancels layout.">
+  <dummy><label>Enable Multi-Selection</label></dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function() {
+  // ✅ Check if URL contains 'logic' parameter
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('logic')) {
+    return;
+  }
+
+  if (window.__multiSelectEnabled) {
+    console.log('[Multi-Select] Already enabled');
+    return;
+  }
+  window.__multiSelectEnabled = true;
+  
+  // Store modifier keys globally so select() can access them
+  window.__lastModifierKeys = { ctrl: false, meta: false };
+  
+  // Intercept Gesture.doStart to capture modifier keys before select() is called
+  const originalDoStart = Blockly.Gesture.prototype.doStart;
+  Blockly.Gesture.prototype.doStart = function(e) {
+    // Capture modifier keys BEFORE select() is called
+    window.__lastModifierKeys = {
+      ctrl: e.ctrlKey || false,
+      meta: e.metaKey || false,
+      shift: e.shiftKey || false
+    };
+    // Shift+empty main workspace: used to skip WorkspaceDragger and run marquee (Blockly v8 gesture)
+    this.__shiftEmptyMarquee_ = !!(
+      e.shiftKey &&
+      !this.targetBlock_ &&
+      !this.flyout_
+    );
+
+    return originalDoStart.call(this, e);
+  };
+  
+  // Maintain array of selected blocks
+  window.__multiSelectedBlocks = [];
+  
+  // Override BlockSvg.select() to handle multi-selection
+  const originalSelect = Blockly.BlockSvg.prototype.select;
+  Blockly.BlockSvg.prototype.select = function() {
+    // Skip shadow blocks (same as original)
+    if (this.isShadow() && this.getParent()) {
+      this.getParent().select();
+      return;
+    }
+    
+    const modifiers = window.__lastModifierKeys || {};
+    const isMultiSelect = modifiers.shift;
+    
+    if (isMultiSelect && window.__multiSelectEnabled) {
+      // Multi-select mode: toggle block in selection array
+      const index = window.__multiSelectedBlocks.indexOf(this);
+      
+      if (index > -1) {
+        // Block already selected - deselect it
+        window.__multiSelectedBlocks.splice(index, 1);
+        this.removeSelect();
+        Blockly.common.setSelected(
+          window.__multiSelectedBlocks.length > 0 
+            ? window.__multiSelectedBlocks[window.__multiSelectedBlocks.length - 1]
+            : null
+        );
+      } else {
+        // Add to selection
+        window.__multiSelectedBlocks.push(this);
+        this.addSelect();
+        Blockly.common.setSelected(this);
+      }
+      
+      // Fire event for compatibility
+      const event = new Blockly.Events.Selected(null, this.id, this.workspace.id);
+      Blockly.Events.fire(event);
+      
+    } else {
+      // Normal single selection: clear multi-selection and select single block
+      window.__multiSelectedBlocks.forEach(block => {
+        if (block.removeSelect) block.removeSelect();
+      });
+      window.__multiSelectedBlocks = [this];
+      originalSelect.call(this);
+    }
+  };
+  
+  // Blockly's WorkspaceDragger.startDrag() calls unselect() on the active block when workspace pan
+  // starts — only Blockly.selected loses styling; multi-select extras keep addSelect. Skip that unselect.
+  if (Blockly.WorkspaceDragger && Blockly.WorkspaceDragger.prototype) {
+    Blockly.WorkspaceDragger.prototype.startDrag = function () {
+      if (this.workspace_ && typeof this.workspace_.setupDragSurface === 'function') {
+        this.workspace_.setupDragSurface();
+      }
+    };
+  }
+
+  // Clear selection on workspace click (skip once after layout preview confirm — same gesture's mouseup would clear before moves if order wrong)
+  window.__multiSelectSkipNextWorkspaceClickClear = false;
+  const originalDoWorkspaceClick = Blockly.Gesture.prototype.doWorkspaceClick_;
+  Blockly.Gesture.prototype.doWorkspaceClick_ = function(e) {
+    if (window.__multiSelectSkipNextWorkspaceClickClear) {
+      window.__multiSelectSkipNextWorkspaceClickClear = false;
+      return originalDoWorkspaceClick.call(this, e);
+    }
+    window.__multiSelectedBlocks.forEach(block => {
+      if (block.removeSelect) block.removeSelect();
+    });
+    window.__multiSelectedBlocks = [];
+    return originalDoWorkspaceClick.call(this, e);
+  };
+  
+  // Modify delete shortcut to handle multiple blocks
+  const registry = Blockly.ShortcutRegistry.registry;
+  
+  const deleteShortcut = registry.registry_['delete'];
+  if (deleteShortcut) {
+    const originalDeleteCallback = deleteShortcut.callback;
+    const originalDeletePrecondition = deleteShortcut.preconditionFn;
+    
+    deleteShortcut.preconditionFn = function(workspace) {
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        return !workspace.options.readOnly && multi.some(b => b && b.isDeletable());
+      }
+      if (originalDeletePrecondition) {
+        return originalDeletePrecondition.call(this, workspace);
+      }
+      return false;
+    };
+    
+    deleteShortcut.callback = function(workspace, e) {
+      const multi = window.__multiSelectedBlocks || [];
+      
+      if (multi.length > 1) {
+        e.preventDefault();
+        
+        const blocksToDelete = multi.filter(block => 
+          block && block.workspace && block.isDeletable() && !block.disposed
+        );
+        
+        if (blocksToDelete.length === 0) {
+          window.__multiSelectedBlocks = [];
+          return false;
+        }
+        
+        window.__multiSelectedBlocks = [];
+        
+        // Set up comprehensive error suppression for procedure cleanup errors
+        const originalConsoleError = console.error;
+        const originalWindowError = window.onerror;
+        
+        const shouldSuppressError = function(msg) {
+          if (!msg) return false;
+          const message = String(msg);
+          return (message.includes('toLowerCase') || message.includes('Names.equals')) && 
+                 message.includes('null');
+        };
+        
+        // Override console.error
+        console.error = function(...args) {
+          const fullError = args.join(' ');
+          if (shouldSuppressError(fullError)) {
+            return; // Suppress this specific error
+          }
+          originalConsoleError.apply(console, args);
+        };
+        
+        // Override window.onerror to catch uncaught exceptions
+        window.onerror = function(message, source, lineno, colno, error) {
+          if (shouldSuppressError(message)) {
+            return true; // Suppress this error
+          }
+          if (originalWindowError) {
+            return originalWindowError.call(window, message, source, lineno, colno, error);
+          }
+          return false;
+        };
+        
+        // Group all deletion events together for undo
+        const wasGrouped = Blockly.Events.getGroup();
+        const eventsWereEnabled = Blockly.Events.isEnabled();
+        Blockly.Events.setGroup(true);
+        if (!eventsWereEnabled) {
+          Blockly.Events.enable();
+        }
+        
+        try {
+          // Use checkAndDelete() for proper individual block deletion
+          // All deletions will be grouped together for undo
+          blocksToDelete.forEach((block) => {
+            if (block && block.workspace && !block.disposed && block.isDeletable()) {
+              try {
+                if (typeof block.checkAndDelete === 'function') {
+                  block.checkAndDelete();
+                } else if (typeof block.dispose === 'function') {
+                  block.dispose(false);
+                }
+              } catch (err) {
+                // Suppress the Names.equals error, log others
+                const errMsg = String(err.message || err || '');
+                if (!shouldSuppressError(errMsg)) {
+                  console.warn('[Multi-Select] Error deleting block:', err);
+                }
+              }
+            }
+          });
+        } finally {
+          Blockly.Events.setGroup(wasGrouped);
+          if (!eventsWereEnabled) {
+            Blockly.Events.disable();
+          }
+          // Restore error handlers immediately
+          // Note: Some errors may still appear in console but don't affect functionality
+          console.error = originalConsoleError;
+          window.onerror = originalWindowError;
+        }
+        
+        return true;
+      } else {
+        if (originalDeleteCallback) {
+          return originalDeleteCallback.call(this, workspace, e);
+        }
+        return false;
+      }
+    };
+  }
+  
+  // ============================================
+  // STEP 6: Add G-drag support for multiple blocks
+  // ============================================
+  // Track last mouse position globally for G-drag
+  let lastMousePos = { x: 0, y: 0 };
+  document.addEventListener('mousemove', e => { 
+    lastMousePos.x = e.clientX; 
+    lastMousePos.y = e.clientY; 
+  }, true);
+  
+  let multiDragState = {
+    dragging: false,
+    blocks: [],
+    startPositions: [],
+    startMousePos: null,
+    overlay: null,
+    moveHandler: null,
+    suppressCtx: null,
+    eventsWereEnabled: false
+  };
+  
+  const makeMultiDragOverlay = () => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:transparent;cursor:move;pointer-events:auto;';
+    const swallow = ev => { ev.preventDefault(); ev.stopPropagation(); };
+    ['click', 'dblclick', 'pointerup', 'mouseup', 'mousemove', 'wheel', 'contextmenu'].forEach(t => 
+      el.addEventListener(t, swallow, true)
+    );
+    const handlePointerDown = (e) => {
+      if (!multiDragState.dragging) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation?.();
+      const cancel = (e.button === 2 || e.which === 3);
+      endMultiDrag({ cancel });
+    };
+    
+    el.addEventListener('pointerdown', handlePointerDown, true);
+    el.addEventListener('mousedown', handlePointerDown, true);
+    document.body.appendChild(el);
+    return el;
+  };
+  
+  const startMultiDrag = (e) => {
+    const multi = window.__multiSelectedBlocks || [];
+    if (multi.length < 2) {
+      // Let grabBlock handle single block drag
+      return;
+    }
+    
+    // Only top-level roots; descendants excluded when ancestor is also selected (moveBy throws if parentBlock_)
+    const blocksToDrag = getBlocksSafeForWorkspaceMove();
+    // One whole stack selected → one root; still move that stack (needs length >= 1, not >= 2)
+    if (blocksToDrag.length < 1) {
+      return;
+    }
+    
+    multiDragState.blocks = blocksToDrag;
+    multiDragState.startPositions = blocksToDrag.map(block => {
+      if (typeof block.getRelativeToSurfaceXY === 'function') {
+        const pos = block.getRelativeToSurfaceXY();
+        return { x: pos.x, y: pos.y };
+      }
+      return null;
+    });
+    
+    // Get workspace to convert screen coordinates
+    const workspace = blocksToDrag[0].workspace;
+    if (!workspace) return;
+    
+    // Use current mouse position (from lastMousePos) or event coordinates
+    const mouseX = e ? e.clientX : lastMousePos.x;
+    const mouseY = e ? e.clientY : lastMousePos.y;
+    
+    // Store starting mouse position in workspace coordinates
+    const svg = workspace.getParentSvg();
+    const ctm = svg.getScreenCTM();
+    if (ctm) {
+      const pt = svg.createSVGPoint();
+      pt.x = mouseX;
+      pt.y = mouseY;
+      const svgPt = pt.matrixTransform(ctm.inverse());
+      const origin = workspace.getOriginOffsetInPixels();
+      multiDragState.startMousePos = {
+        x: (svgPt.x - origin.x) / workspace.scale,
+        y: (svgPt.y - origin.y) / workspace.scale
+      };
+    } else {
+      multiDragState.startMousePos = { x: mouseX, y: mouseY };
+    }
+    
+    multiDragState.dragging = true;
+    
+    // Disable events during drag to avoid firing hundreds of move events
+    const eventsWereEnabled = Blockly.Events.isEnabled();
+    if (eventsWereEnabled) {
+      Blockly.Events.disable();
+    }
+    
+    // Handle mouse movement
+    multiDragState.moveHandler = (moveEvent) => {
+      if (!multiDragState.dragging) return;
+      
+      const workspace = multiDragState.blocks[0].workspace;
+      const svg = workspace.getParentSvg();
+      const ctm = svg.getScreenCTM();
+      
+      let currentMousePos;
+      if (ctm) {
+        const pt = svg.createSVGPoint();
+        pt.x = moveEvent.clientX;
+        pt.y = moveEvent.clientY;
+        const svgPt = pt.matrixTransform(ctm.inverse());
+        const origin = workspace.getOriginOffsetInPixels();
+        currentMousePos = {
+          x: (svgPt.x - origin.x) / workspace.scale,
+          y: (svgPt.y - origin.y) / workspace.scale
+        };
+      } else {
+        currentMousePos = { x: moveEvent.clientX, y: moveEvent.clientY };
+      }
+      
+      const deltaX = currentMousePos.x - multiDragState.startMousePos.x;
+      const deltaY = currentMousePos.y - multiDragState.startMousePos.y;
+      
+      // Move all blocks by the same delta (events disabled during drag)
+      multiDragState.blocks.forEach((block, i) => {
+        if (!block || !block.workspace || block.disposed) return;
+        const startPos = multiDragState.startPositions[i];
+        if (!startPos) return;
+        
+        const newX = startPos.x + deltaX;
+        const newY = startPos.y + deltaY;
+        
+        if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+          block.moveTo(new Blockly.utils.Coordinate(newX, newY));
+        } else if (typeof block.moveBy === 'function') {
+          const cur = block.getRelativeToSurfaceXY();
+          block.moveBy(newX - cur.x, newY - cur.y);
+        }
+      });
+    };
+    
+    // Store events enabled state for restoration
+    multiDragState.eventsWereEnabled = eventsWereEnabled;
+    
+    document.addEventListener('mousemove', multiDragState.moveHandler, true);
+    
+    multiDragState.overlay = makeMultiDragOverlay();
+    multiDragState.suppressCtx = e => { e.preventDefault(); };
+    window.addEventListener('contextmenu', multiDragState.suppressCtx, true);
+    
+    console.log(\`[Multi-Select] Dragging \${blocksToDrag.length} blocks. Click to drop, right-click to cancel.\`);
+  };
+  
+  const endMultiDrag = ({ cancel }) => {
+    if (!multiDragState.dragging) return;
+    multiDragState.dragging = false;
+    
+    const blocks = multiDragState.blocks.slice(); // Copy arrays
+    const startPositions = multiDragState.startPositions.slice();
+    
+    if (multiDragState.moveHandler) {
+      document.removeEventListener('mousemove', multiDragState.moveHandler, true);
+      multiDragState.moveHandler = null;
+    }
+    
+    if (multiDragState.overlay && multiDragState.overlay.parentNode) {
+      multiDragState.overlay.parentNode.removeChild(multiDragState.overlay);
+      multiDragState.overlay = null;
+    }
+    
+    if (multiDragState.suppressCtx) {
+      window.removeEventListener('contextmenu', multiDragState.suppressCtx, true);
+      multiDragState.suppressCtx = null;
+    }
+    
+    // Clear state before restore to prevent interference
+    multiDragState.blocks = [];
+    multiDragState.startPositions = [];
+    multiDragState.startMousePos = null;
+    
+    // Re-enable events if they were enabled before drag
+    if (multiDragState.eventsWereEnabled) {
+      Blockly.Events.enable();
+    }
+    
+    if (cancel && blocks.length > 0 && startPositions.length > 0) {
+      // Restore original positions (no events needed for cancel)
+      const restoreAll = () => {
+        try {
+          blocks.forEach((block, i) => {
+            const startPos = startPositions[i];
+            if (!startPos || !block || !block.workspace || block.disposed) return;
+            
+            if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+              block.moveTo(new Blockly.utils.Coordinate(startPos.x, startPos.y));
+            } else if (typeof block.getRelativeToSurfaceXY === 'function' && typeof block.moveBy === 'function') {
+              const cur = block.getRelativeToSurfaceXY();
+              const dx = startPos.x - cur.x;
+              const dy = startPos.y - cur.y;
+              if (dx || dy) block.moveBy(dx, dy);
+            }
+          });
+          console.log('[Multi-Select] Restored blocks to original positions.');
+        } catch (e) {
+          console.debug('[Multi-Select] Restore failed:', e);
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(restoreAll));
+    } else if (!cancel && blocks.length > 0) {
+      // Fire move events for undo support (grouped together)
+      const wasGrouped = Blockly.Events.getGroup();
+      Blockly.Events.setGroup(true);
+      
+      try {
+        blocks.forEach((block, i) => {
+          if (!block || !block.workspace || block.disposed) return;
+          
+          const startPos = startPositions[i];
+          if (!startPos) return;
+          
+          const currentPos = block.getRelativeToSurfaceXY();
+          
+          // Only fire event if block actually moved
+          if (Math.abs(currentPos.x - startPos.x) > 0.1 || Math.abs(currentPos.y - startPos.y) > 0.1) {
+            // Create and fire BlockMove event
+            if (Blockly.Events.BlockMove) {
+              const moveEvent = new Blockly.Events.BlockMove(block);
+              moveEvent.newCoordinate = new Blockly.utils.Coordinate(currentPos.x, currentPos.y);
+              moveEvent.oldCoordinate = new Blockly.utils.Coordinate(startPos.x, startPos.y);
+              Blockly.Events.fire(moveEvent);
+            }
+          }
+        });
+      } finally {
+        Blockly.Events.setGroup(wasGrouped);
+      }
+    }
+    
+    // Clear events enabled state
+    multiDragState.eventsWereEnabled = false;
+  };
+  
+  // Register G key for multi-drag (must run before grabBlock)
+  // Use capture phase and check early to intercept multi-selection drags
+  document.addEventListener('keydown', e => {
+    if (e.key && e.key.toLowerCase() === 'g' && !multiDragState.dragging) {
+      if (isTypingTargetLayout(e.target)) return;
+      
+      const multi = window.__multiSelectedBlocks || [];
+      if (multi.length > 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        // Create a synthetic event with current mouse position
+        const syntheticEvent = {
+          clientX: lastMousePos.x,
+          clientY: lastMousePos.y
+        };
+        startMultiDrag(syntheticEvent);
+        return false;
+      }
+      // If only one block, let grabBlock handle it
+    }
+  }, true);
+  
+  window.addEventListener('blur', () => endMultiDrag({ cancel: false }));
+  
+  // ============================================
+  // Layout: Ctrl+Q/E or Shift+Q/E — mouse preview ghosts, left-click commit, wheel gap in spacing; WASD; Esc
+  // ============================================
+  const LAYOUT_GAP = 12;
+  const LAYOUT_GAP_MIN = 4;
+  const LAYOUT_GAP_MAX = 200;
+  const LAYOUT_MOUSE_DEADZONE_WS = 6;
+  let layoutMode = null; // null | 'align' | 'space'
+
+  let layoutPreview = {
+    svgGroup: null,
+    workspace: null,
+    pointerClient: { x: 0, y: 0 },
+    raf: null,
+    listenersBound: false,
+    alignEdge: 'left',
+    spaceVertical: true,
+    gap: LAYOUT_GAP,
+    moveHandler: null,
+    wheelHandler: null,
+    downHandler: null
+  };
+
+  const screenToWorkspaceCoordsLayout = (workspace, clientX, clientY) => {
+    const svg = workspace.getParentSvg();
+    if (!svg) return { x: clientX, y: clientY };
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: clientX, y: clientY };
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const svgPt = pt.matrixTransform(ctm.inverse());
+    const origin = workspace.getOriginOffsetInPixels();
+    return {
+      x: (svgPt.x - origin.x) / workspace.scale,
+      y: (svgPt.y - origin.y) / workspace.scale
+    };
+  };
+
+  const getAlignDeltasForEdge = (edge, rects) => {
+    let target;
+    if (edge === 'top') target = Math.min(...rects.map((r) => r.top));
+    else if (edge === 'left') target = Math.min(...rects.map((r) => r.left));
+    else if (edge === 'bottom') target = Math.max(...rects.map((r) => r.bottom));
+    else if (edge === 'right') target = Math.max(...rects.map((r) => r.right));
+    else return null;
+    return rects.map((r) => {
+      let dx = 0;
+      let dy = 0;
+      if (edge === 'top') dy = target - r.top;
+      else if (edge === 'left') dx = target - r.left;
+      else if (edge === 'bottom') dy = target - r.bottom;
+      else if (edge === 'right') dx = target - r.right;
+      return { dx, dy };
+    });
+  };
+
+  const computeAlignPreviewRects = (edge) => {
+    const blocks = getBlocksSafeForWorkspaceMove();
+    if (blocks.length === 0) return [];
+    const rects = blocks.map((b) => {
+      try {
+        return b.getBoundingRectangle();
+      } catch (err) {
+        return null;
+      }
+    });
+    if (rects.some((r) => !r)) return [];
+    const deltas = getAlignDeltasForEdge(edge, rects);
+    if (!deltas) return [];
+    return rects.map((r, i) => ({
+      x: r.left + deltas[i].dx,
+      y: r.top + deltas[i].dy,
+      w: r.right - r.left,
+      h: r.bottom - r.top
+    }));
+  };
+
+  const computeSpacePreviewRects = (vertical, gapPx) => {
+    const blocks = getBlocksSafeForWorkspaceMove();
+    if (blocks.length < 2) return [];
+    const ordered = [...blocks].sort((a, b) => {
+      try {
+        if (vertical) {
+          return a.getBoundingRectangle().top - b.getBoundingRectangle().top;
+        }
+        return a.getBoundingRectangle().left - b.getBoundingRectangle().left;
+      } catch (err) {
+        return 0;
+      }
+    });
+    const rects = ordered.map((b) => {
+      try {
+        return b.getBoundingRectangle();
+      } catch (err) {
+        return null;
+      }
+    });
+    if (rects.some((r) => !r)) return [];
+    const out = [];
+    const gap = Math.max(LAYOUT_GAP_MIN, Math.min(LAYOUT_GAP_MAX, gapPx));
+    let prevEnd = vertical ? rects[0].bottom : rects[0].right;
+    out.push({
+      x: rects[0].left,
+      y: rects[0].top,
+      w: rects[0].right - rects[0].left,
+      h: rects[0].bottom - rects[0].top
+    });
+    for (let j = 1; j < ordered.length; j++) {
+      const r = rects[j];
+      if (vertical) {
+        const dy = prevEnd + gap - r.top;
+        const nt = r.top + dy;
+        const nb = r.bottom + dy;
+        prevEnd = nb;
+        out.push({ x: r.left, y: nt, w: r.right - r.left, h: r.bottom - r.top });
+      } else {
+        const dx = prevEnd + gap - r.left;
+        const nl = r.left + dx;
+        const nr = r.right + dx;
+        prevEnd = nr;
+        out.push({ x: nl, y: r.top, w: r.right - r.left, h: r.bottom - r.top });
+      }
+    }
+    return out;
+  };
+
+  const getSelectionBoundsCenterWorkspace = (workspace) => {
+    const blocks = getBlocksSafeForWorkspaceMove();
+    if (blocks.length === 0) return null;
+    let minL = Infinity;
+    let minT = Infinity;
+    let maxR = -Infinity;
+    let maxB = -Infinity;
+    for (let i = 0; i < blocks.length; i++) {
+      try {
+        const r = blocks[i].getBoundingRectangle();
+        if (!r) continue;
+        minL = Math.min(minL, r.left);
+        minT = Math.min(minT, r.top);
+        maxR = Math.max(maxR, r.right);
+        maxB = Math.max(maxB, r.bottom);
+      } catch (err) {
+        /* skip */
+      }
+    }
+    if (minL === Infinity) return null;
+    return {
+      x: (minL + maxR) / 2,
+      y: (minT + maxB) / 2
+    };
+  };
+
+  const mapPointerToAlignEdge = (workspace, clientX, clientY) => {
+    const c = getSelectionBoundsCenterWorkspace(workspace);
+    const p = screenToWorkspaceCoordsLayout(workspace, clientX, clientY);
+    if (!c) return 'left';
+    const vx = p.x - c.x;
+    const vy = p.y - c.y;
+    if (Math.abs(vx) < LAYOUT_MOUSE_DEADZONE_WS && Math.abs(vy) < LAYOUT_MOUSE_DEADZONE_WS) {
+      return layoutPreview.alignEdge;
+    }
+    if (Math.abs(vx) >= Math.abs(vy)) {
+      return vx < 0 ? 'left' : 'right';
+    }
+    return vy < 0 ? 'top' : 'bottom';
+  };
+
+  const mapPointerToSpaceVertical = (workspace, clientX, clientY) => {
+    const c = getSelectionBoundsCenterWorkspace(workspace);
+    const p = screenToWorkspaceCoordsLayout(workspace, clientX, clientY);
+    if (!c) return true;
+    const vx = p.x - c.x;
+    const vy = p.y - c.y;
+    if (Math.abs(vx) < LAYOUT_MOUSE_DEADZONE_WS && Math.abs(vy) < LAYOUT_MOUSE_DEADZONE_WS) {
+      return layoutPreview.spaceVertical;
+    }
+    return Math.abs(vy) >= Math.abs(vx);
+  };
+
+  const ensureLayoutPreviewLayer = (workspace) => {
+    const svg = workspace.getParentSvg();
+    if (!svg) return null;
+    let g = layoutPreview.svgGroup;
+    if (g && g.ownerSVGElement !== svg) {
+      if (g.parentNode) g.parentNode.removeChild(g);
+      g = null;
+      layoutPreview.svgGroup = null;
+    }
+    if (!g) {
+      g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      g.setAttribute('data-multi-select-layout-preview', '1');
+      g.style.pointerEvents = 'none';
+      const parent = svg.querySelector('.blocklyBlockCanvas') || svg;
+      parent.appendChild(g);
+      layoutPreview.svgGroup = g;
+    }
+    layoutPreview.workspace = workspace;
+    return g;
+  };
+
+  const clearLayoutPreviewLayer = () => {
+    const g = layoutPreview.svgGroup;
+    if (!g) return;
+    while (g.firstChild) {
+      g.removeChild(g.firstChild);
+    }
+  };
+
+  const removeLayoutPreviewLayer = () => {
+    if (layoutPreview.svgGroup && layoutPreview.svgGroup.parentNode) {
+      layoutPreview.svgGroup.parentNode.removeChild(layoutPreview.svgGroup);
+    }
+    layoutPreview.svgGroup = null;
+    layoutPreview.workspace = null;
+  };
+
+  const drawLayoutPreviewGhosts = (boxes) => {
+    const ws = Blockly.getMainWorkspace();
+    if (!ws || !layoutMode) return;
+    const g = ensureLayoutPreviewLayer(ws);
+    if (!g) return;
+    clearLayoutPreviewLayer();
+    boxes.forEach((box) => {
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', box.x);
+      rect.setAttribute('y', box.y);
+      rect.setAttribute('width', Math.max(0, box.w));
+      rect.setAttribute('height', Math.max(0, box.h));
+      rect.setAttribute('fill', 'rgba(255, 152, 0, 0.12)');
+      rect.setAttribute('stroke', '#ff9800');
+      rect.setAttribute('stroke-width', '2');
+      rect.setAttribute('stroke-dasharray', '6,4');
+      rect.style.pointerEvents = 'none';
+      g.appendChild(rect);
+    });
+  };
+
+  const scheduleLayoutPreviewDraw = () => {
+    if (layoutPreview.raf != null) return;
+    layoutPreview.raf = requestAnimationFrame(() => {
+      layoutPreview.raf = null;
+      if (!layoutMode) return;
+      const ws = Blockly.getMainWorkspace();
+      if (!ws) return;
+      let boxes = [];
+      if (layoutMode === 'align') {
+        layoutPreview.alignEdge = mapPointerToAlignEdge(
+          ws,
+          layoutPreview.pointerClient.x,
+          layoutPreview.pointerClient.y
+        );
+        boxes = computeAlignPreviewRects(layoutPreview.alignEdge);
+      } else {
+        layoutPreview.spaceVertical = mapPointerToSpaceVertical(
+          ws,
+          layoutPreview.pointerClient.x,
+          layoutPreview.pointerClient.y
+        );
+        boxes = computeSpacePreviewRects(layoutPreview.spaceVertical, layoutPreview.gap);
+      }
+      drawLayoutPreviewGhosts(boxes);
+    });
+  };
+
+  const teardownLayoutPreview = () => {
+    if (layoutPreview.raf != null) {
+      cancelAnimationFrame(layoutPreview.raf);
+      layoutPreview.raf = null;
+    }
+    if (layoutPreview.moveHandler) {
+      document.removeEventListener('mousemove', layoutPreview.moveHandler, true);
+      layoutPreview.moveHandler = null;
+    }
+    if (layoutPreview.wheelHandler) {
+      document.removeEventListener('wheel', layoutPreview.wheelHandler, true);
+      layoutPreview.wheelHandler = null;
+    }
+    if (layoutPreview.downHandler) {
+      document.removeEventListener('pointerdown', layoutPreview.downHandler, true);
+      layoutPreview.downHandler = null;
+    }
+    layoutPreview.listenersBound = false;
+    removeLayoutPreviewLayer();
+  };
+
+  const commitLayoutPreview = () => {
+    if (!layoutMode) return;
+    if (layoutMode === 'align') {
+      alignSelection(layoutPreview.alignEdge);
+    } else {
+      const blocks = getBlocksSafeForWorkspaceMove();
+      if (blocks.length < 2) {
+        console.log('[Multi-Select] Spacing needs at least 2 selected blocks.');
+      } else if (layoutPreview.spaceVertical) {
+        spaceVerticalEqualGap(layoutPreview.gap);
+      } else {
+        spaceHorizontalEqualGap(layoutPreview.gap);
+      }
+    }
+    layoutMode = null;
+    teardownLayoutPreview();
+    logLayoutMode();
+  };
+
+  const setupLayoutPreview = () => {
+    teardownLayoutPreview();
+    const ws = Blockly.getMainWorkspace();
+    if (!ws) return;
+    layoutPreview.gap = LAYOUT_GAP;
+    layoutPreview.alignEdge = 'left';
+    layoutPreview.spaceVertical = true;
+    layoutPreview.pointerClient = { x: lastMousePos.x, y: lastMousePos.y };
+
+    layoutPreview.moveHandler = (e) => {
+      layoutPreview.pointerClient.x = e.clientX;
+      layoutPreview.pointerClient.y = e.clientY;
+      scheduleLayoutPreviewDraw();
+    };
+
+    layoutPreview.wheelHandler = (e) => {
+      if (layoutMode !== 'space') return;
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.deltaY > 0 ? -4 : 4;
+      layoutPreview.gap = Math.max(
+        LAYOUT_GAP_MIN,
+        Math.min(LAYOUT_GAP_MAX, layoutPreview.gap + delta)
+      );
+      scheduleLayoutPreviewDraw();
+    };
+
+    layoutPreview.downHandler = (e) => {
+      if (!layoutMode || e.type !== 'pointerdown') return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.pointerType !== 'mouse' && e.buttons !== 1 && e.button !== 0) return;
+      if (isTypingTargetLayout(e.target)) {
+        return;
+      }
+      window.__multiSelectSkipNextWorkspaceClickClear = true;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      commitLayoutPreview();
+      setTimeout(() => {
+        if (window.__multiSelectSkipNextWorkspaceClickClear) {
+          window.__multiSelectSkipNextWorkspaceClickClear = false;
+        }
+      }, 500);
+    };
+
+    document.addEventListener('mousemove', layoutPreview.moveHandler, true);
+    document.addEventListener('wheel', layoutPreview.wheelHandler, { capture: true, passive: false });
+    document.addEventListener('pointerdown', layoutPreview.downHandler, true);
+    layoutPreview.listenersBound = true;
+    scheduleLayoutPreviewDraw();
+  };
+
+  const layoutHud = document.createElement('div');
+  layoutHud.id = 'multi-select-layout-hud';
+  layoutHud.setAttribute('aria-live', 'polite');
+  layoutHud.style.cssText = [
+    'position:fixed',
+    'right:12px',
+    'bottom:12px',
+    'max-width:300px',
+    'z-index:2147483640',
+    'font:12px/1.4 system-ui,Segoe UI,sans-serif',
+    'color:#e8eaed',
+    'background:rgba(28,28,32,.94)',
+    'border:1px solid rgba(255,255,255,.14)',
+    'border-radius:8px',
+    'padding:10px 14px',
+    'box-shadow:0 4px 20px rgba(0,0,0,.4)',
+    'pointer-events:none',
+    'display:none',
+    'text-align:left',
+    'user-select:none'
+  ].join(';');
+  const layoutHudTitle = document.createElement('div');
+  layoutHudTitle.style.cssText = 'font-weight:600;margin-bottom:6px;color:#ff9800;font-size:12px;';
+  const layoutHudBody = document.createElement('div');
+  layoutHudBody.style.cssText = 'font-size:11px;color:#c4c6ca;line-height:1.45;white-space:pre-line;';
+  layoutHud.appendChild(layoutHudTitle);
+  layoutHud.appendChild(layoutHudBody);
+  document.body.appendChild(layoutHud);
+
+  const refreshLayoutHud = () => {
+    if (layoutMode === null) {
+      layoutHud.style.display = 'none';
+      return;
+    }
+    layoutHud.style.display = 'block';
+    if (layoutMode === 'align') {
+      layoutHudTitle.textContent = 'Layout · Align edges';
+      layoutHudBody.textContent =
+        'Move pointer — ghost shows alignment · Left-click confirm · WASD · Esc cancel';
+    } else {
+      layoutHudTitle.textContent = 'Layout · Equal gap spacing';
+      layoutHudBody.textContent =
+        'Move pointer — vertical vs horizontal · Wheel adjusts gap · Left-click confirm · WASD · Esc';
+    }
+  };
+
+  const isTypingTargetLayout = (t) =>
+    t &&
+    (t.tagName === 'INPUT' ||
+      t.tagName === 'TEXTAREA' ||
+      t.isContentEditable ||
+      t.contentEditable === 'true');
+
+  const getMovableSelection = () => {
+    const multi = window.__multiSelectedBlocks || [];
+    return multi.filter(
+      (b) => b && b.workspace && !b.disposed && (!b.isMovable || b.isMovable())
+    );
+  };
+
+  /** Exclude blocks nested under another selected block (move each stack once). */
+  const filterBlocksNotUnderSelectedAncestor = (blocks) => {
+    const set = new Set(blocks.filter(Boolean));
+    return blocks.filter((b) => {
+      if (!b || b.disposed) return false;
+      let p = b.getParent();
+      while (p) {
+        if (set.has(p)) return false;
+        p = p.getParent();
+      }
+      return true;
+    });
+  };
+
+  /** Blockly moveBy/moveTo only apply when the block has no parent connection. */
+  const filterTopLevelBlocks = (blocks) =>
+    blocks.filter((b) => b && !b.getParent());
+
+  /** Movable top-level roots: safe for moveTo/moveBy (fixes nested multi-select drag). */
+  const getBlocksSafeForWorkspaceMove = () => {
+    const movable = getMovableSelection();
+    return filterTopLevelBlocks(filterBlocksNotUnderSelectedAncestor(movable));
+  };
+
+  /**
+   * One duplicate root per statement/value stack segment in the selection: the block whose
+   * previous connection is not attached to another selected block. (A→B→C all selected → one
+   * root A.) Unlike filterTopLevelBlocks, middle blocks are not treated as separate roots.
+   */
+  const getStackRootsForDuplicate = () => {
+    const movable = getMovableSelection();
+    const set = new Set(movable.filter(Boolean));
+    const chainRoots = movable.filter((b) => {
+      if (!b || b.disposed) return false;
+      const prev = b.getPreviousBlock && b.getPreviousBlock();
+      if (prev && set.has(prev)) return false;
+      return true;
+    });
+    return filterBlocksNotUnderSelectedAncestor(chainRoots);
+  };
+
+  /**
+   * Map blocks that were selected under oldRoot to their copies under newRoot after paste.
+   * Uses getDescendants(ordered) so input / next / nested chains all match (not only getNextBlock).
+   */
+  const mapDuplicateTreeSelection = (oldRoot, newRoot, selectedSet) => {
+    if (!oldRoot || !newRoot || typeof oldRoot.getDescendants !== 'function') return [];
+    const oldList = oldRoot.getDescendants(true);
+    const newList = newRoot.getDescendants(true);
+    const out = [];
+    const n = Math.min(oldList.length, newList.length);
+    for (let i = 0; i < n; i++) {
+      if (selectedSet.has(oldList[i])) out.push(newList[i]);
+    }
+    return out;
+  };
+
+  /**
+   * Blockly.clipboard.duplicate uses BlockSvg.toCopyData() with addNextBlocks: false, so stacks
+   * connected via next (e.g. Verge3D comment chains) paste as a single block. Serialize with
+   * next + input children and paste — same as full stack copy.
+   */
+  const duplicateBlockFullTree = (block) => {
+    if (!block || block.disposed || !block.workspace) return null;
+    const ws = block.workspace;
+    if (typeof ws.paste !== 'function') return null;
+
+    const save =
+      Blockly.serialization &&
+      Blockly.serialization.blocks &&
+      Blockly.serialization.blocks.save;
+    let pasted = null;
+    if (typeof save === 'function') {
+      const saveInfo = save(block, {
+        addCoordinates: true,
+        addNextBlocks: true,
+        addInputBlocks: true,
+        doFullSerialization: true,
+      });
+      if (saveInfo) pasted = ws.paste(saveInfo);
+    }
+    if (
+      !pasted &&
+      Blockly.Xml &&
+      typeof Blockly.Xml.blockToDomWithXY === 'function'
+    ) {
+      const dom = Blockly.Xml.blockToDomWithXY(block);
+      if (dom) pasted = ws.paste(dom);
+    }
+    if (!pasted && Blockly.clipboard && typeof Blockly.clipboard.duplicate === 'function') {
+      pasted = Blockly.clipboard.duplicate(block);
+    }
+    return pasted;
+  };
+
+  /** Shift+D via shortCutsBlock: multi-duplicate using stack roots (incl. one chain of 3+ blocks). */
+  window.__multiSelectDuplicateRoots = function () {
+    if (!window.__multiSelectEnabled) return false;
+    const workspace = Blockly.getMainWorkspace();
+    if (!workspace || workspace.options.readOnly) return false;
+
+    const multi = [...(window.__multiSelectedBlocks || [])];
+    if (multi.length < 2) return false;
+
+    const roots = getStackRootsForDuplicate();
+    if (roots.length === 0) return false;
+
+    for (let i = 0; i < roots.length; i++) {
+      const b = roots[i];
+      if (!b || b.disposed) return false;
+      if (b.isInFlyout) return false;
+      if (typeof b.isDeletable === 'function' && !b.isDeletable()) return false;
+      if (typeof b.isMovable === 'function' && !b.isMovable()) return false;
+      if (typeof b.isDuplicatable === 'function' && !b.isDuplicatable()) return false;
+    }
+
+    const canDup =
+      (Blockly.serialization &&
+        Blockly.serialization.blocks &&
+        typeof Blockly.serialization.blocks.save === 'function') ||
+      (Blockly.Xml && typeof Blockly.Xml.blockToDomWithXY === 'function') ||
+      (Blockly.clipboard && typeof Blockly.clipboard.duplicate === 'function');
+    if (!canDup) return false;
+
+    const wasGrouped = Blockly.Events.getGroup();
+    Blockly.Events.setGroup(true);
+    try {
+      if (roots.length === 1) {
+        const root = roots[0];
+        const pasted = duplicateBlockFullTree(root);
+        if (!pasted) return false;
+
+        const multiSet = new Set(multi.filter(Boolean));
+        const newBlocks = mapDuplicateTreeSelection(root, pasted, multiSet);
+        if (newBlocks.length === 0) return false;
+
+        multi.forEach((oldB) => {
+          if (oldB && oldB.removeSelect) oldB.removeSelect();
+        });
+        window.__multiSelectedBlocks = newBlocks;
+        newBlocks.forEach((blk) => {
+          if (blk && blk.addSelect) blk.addSelect();
+        });
+        const last = newBlocks[newBlocks.length - 1];
+        Blockly.common.setSelected(last);
+        try {
+          const ev = new Blockly.Events.Selected(null, last.id, last.workspace.id);
+          Blockly.Events.fire(ev);
+        } catch (err) {
+          /* ignore */
+        }
+        return true;
+      }
+
+      const newRoots = new Array(roots.length);
+      for (let j = 0; j < roots.length; j++) {
+        newRoots[j] = duplicateBlockFullTree(roots[j]) || null;
+      }
+
+      if (!newRoots.some(Boolean)) return false;
+
+      const multiSet = new Set(multi.filter(Boolean));
+      const newBlocks = [];
+      for (let j = 0; j < roots.length; j++) {
+        const nb = newRoots[j];
+        if (!nb) continue;
+        newBlocks.push.apply(newBlocks, mapDuplicateTreeSelection(roots[j], nb, multiSet));
+      }
+
+      multi.forEach((ob) => {
+        if (ob && ob.removeSelect) ob.removeSelect();
+      });
+      const selection = newBlocks.length > 0 ? newBlocks : newRoots.filter(Boolean);
+      window.__multiSelectedBlocks = selection;
+      selection.forEach((blk) => {
+        if (blk && blk.addSelect) blk.addSelect();
+      });
+      const last = selection[selection.length - 1];
+      Blockly.common.setSelected(last);
+      try {
+        const ev = new Blockly.Events.Selected(null, last.id, last.workspace.id);
+        Blockly.Events.fire(ev);
+      } catch (err) {
+        /* ignore */
+      }
+
+      return true;
+    } finally {
+      Blockly.Events.setGroup(wasGrouped);
+    }
+  };
+
+  const moveBlockToLayout = (block, x, y) => {
+    if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+      block.moveTo(new Blockly.utils.Coordinate(x, y));
+    } else if (typeof block.getRelativeToSurfaceXY === 'function' && typeof block.moveBy === 'function') {
+      const cur = block.getRelativeToSurfaceXY();
+      block.moveBy(x - cur.x, y - cur.y);
+    }
+  };
+
+  const fireBlockMovesForUndo = (blocks, startPositions) => {
+    const wasGrouped = Blockly.Events.getGroup();
+    Blockly.Events.setGroup(true);
+    try {
+      blocks.forEach((block, i) => {
+        if (!block || block.disposed) return;
+        const startPos = startPositions[i];
+        if (!startPos) return;
+        const currentPos = block.getRelativeToSurfaceXY();
+        if (
+          Math.abs(currentPos.x - startPos.x) > 0.1 ||
+          Math.abs(currentPos.y - startPos.y) > 0.1
+        ) {
+          if (Blockly.Events.BlockMove) {
+            const moveEvent = new Blockly.Events.BlockMove(block);
+            moveEvent.newCoordinate = new Blockly.utils.Coordinate(currentPos.x, currentPos.y);
+            moveEvent.oldCoordinate = new Blockly.utils.Coordinate(startPos.x, startPos.y);
+            Blockly.Events.fire(moveEvent);
+          }
+        }
+      });
+    } finally {
+      Blockly.Events.setGroup(wasGrouped);
+    }
+  };
+
+  const alignSelection = (edge) => {
+    const blocks = getBlocksSafeForWorkspaceMove();
+    if (blocks.length === 0) return;
+    const rects = blocks.map((b) => {
+      try {
+        return b.getBoundingRectangle();
+      } catch (e) {
+        return null;
+      }
+    });
+    if (rects.some((r) => !r)) return;
+
+    const deltas = getAlignDeltasForEdge(edge, rects);
+    if (!deltas) return;
+
+    const startPositions = blocks.map((b) => {
+      const p = b.getRelativeToSurfaceXY();
+      return { x: p.x, y: p.y };
+    });
+
+    const eventsWereEnabled = Blockly.Events.isEnabled();
+    Blockly.Events.disable();
+    try {
+      blocks.forEach((b, i) => {
+        const d = deltas[i];
+        moveBlockToLayout(b, startPositions[i].x + d.dx, startPositions[i].y + d.dy);
+      });
+    } finally {
+      if (eventsWereEnabled) Blockly.Events.enable();
+    }
+    fireBlockMovesForUndo(blocks, startPositions);
+  };
+
+  const spaceVerticalEqualGap = (gapPx) => {
+    const gap = gapPx != null ? gapPx : LAYOUT_GAP;
+    const blocks = getBlocksSafeForWorkspaceMove();
+    if (blocks.length < 2) {
+      console.log('[Multi-Select] Spacing needs at least 2 selected blocks.');
+      return;
+    }
+    const ordered = [...blocks].sort((a, b) => {
+      try {
+        return a.getBoundingRectangle().top - b.getBoundingRectangle().top;
+      } catch (e) {
+        return 0;
+      }
+    });
+    const startPositions = ordered.map((b) => {
+      const p = b.getRelativeToSurfaceXY();
+      return { x: p.x, y: p.y };
+    });
+    const eventsWereEnabled = Blockly.Events.isEnabled();
+    Blockly.Events.disable();
+    try {
+      let prevBottom = ordered[0].getBoundingRectangle().bottom;
+      for (let j = 1; j < ordered.length; j++) {
+        const b = ordered[j];
+        const r = b.getBoundingRectangle();
+        const desiredTop = prevBottom + gap;
+        const dy = desiredTop - r.top;
+        const p = b.getRelativeToSurfaceXY();
+        moveBlockToLayout(b, p.x, p.y + dy);
+        prevBottom = b.getBoundingRectangle().bottom;
+      }
+    } finally {
+      if (eventsWereEnabled) Blockly.Events.enable();
+    }
+    fireBlockMovesForUndo(ordered, startPositions);
+  };
+
+  const spaceHorizontalEqualGap = (gapPx) => {
+    const gap = gapPx != null ? gapPx : LAYOUT_GAP;
+    const blocks = getBlocksSafeForWorkspaceMove();
+    if (blocks.length < 2) {
+      console.log('[Multi-Select] Spacing needs at least 2 selected blocks.');
+      return;
+    }
+    const ordered = [...blocks].sort((a, b) => {
+      try {
+        return a.getBoundingRectangle().left - b.getBoundingRectangle().left;
+      } catch (e) {
+        return 0;
+      }
+    });
+    const startPositions = ordered.map((b) => {
+      const p = b.getRelativeToSurfaceXY();
+      return { x: p.x, y: p.y };
+    });
+    const eventsWereEnabled = Blockly.Events.isEnabled();
+    Blockly.Events.disable();
+    try {
+      let prevRight = ordered[0].getBoundingRectangle().right;
+      for (let j = 1; j < ordered.length; j++) {
+        const b = ordered[j];
+        const r = b.getBoundingRectangle();
+        const desiredLeft = prevRight + gap;
+        const dx = desiredLeft - r.left;
+        const p = b.getRelativeToSurfaceXY();
+        moveBlockToLayout(b, p.x + dx, p.y);
+        prevRight = b.getBoundingRectangle().right;
+      }
+    } finally {
+      if (eventsWereEnabled) Blockly.Events.enable();
+    }
+    fireBlockMovesForUndo(ordered, startPositions);
+  };
+
+  const logLayoutMode = () => {
+    refreshLayoutHud();
+    if (layoutMode === null) {
+      console.log('[Multi-Select] Layout mode off.');
+    } else if (layoutMode === 'align') {
+      console.log(
+        '%c[Multi-Select] Layout: ALIGN — move mouse for preview, left-click confirm, WASD, Ctrl+E spacing, Esc cancel.',
+        'color: #ff9800; font-weight: bold;'
+      );
+    } else {
+      console.log(
+        '%c[Multi-Select] Layout: SPACING — move mouse (vertical vs horizontal), wheel gap, left-click, WASD, Ctrl+Q align, Esc.',
+        'color: #ff9800; font-weight: bold;'
+      );
+    }
+  };
+
+  const enterLayoutAlign = function () {
+    layoutMode = 'align';
+    logLayoutMode();
+    setupLayoutPreview();
+  };
+
+  const enterLayoutSpace = function () {
+    layoutMode = 'space';
+    logLayoutMode();
+    setupLayoutPreview();
+  };
+
+  window.__multiSelectEnterLayoutAlign = enterLayoutAlign;
+  window.__multiSelectEnterLayoutSpace = enterLayoutSpace;
+  window.__multiSelectCycleLayoutMode = enterLayoutAlign;
+
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (isTypingTargetLayout(e.target)) return;
+
+      // Shift+Q / Shift+E: layout preview (same shortcuts as floating toolbar)
+      if (
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key &&
+        (e.key.toLowerCase() === 'q' || e.key.toLowerCase() === 'e')
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key.toLowerCase() === 'q') enterLayoutAlign();
+        else enterLayoutSpace();
+        return;
+      }
+
+      // Esc: exit layout mode
+      if (e.key === 'Escape' && layoutMode !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        layoutMode = null;
+        teardownLayoutPreview();
+        logLayoutMode();
+        return;
+      }
+
+      // Ctrl+Q: align menu (Control key only — avoids Cmd+Q quit on macOS)
+      if (
+        e.ctrlKey &&
+        !e.metaKey &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key &&
+        e.key.toLowerCase() === 'q'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        enterLayoutAlign();
+        return;
+      }
+
+      // Ctrl+E: spacing menu
+      if (
+        e.ctrlKey &&
+        !e.metaKey &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key &&
+        e.key.toLowerCase() === 'e'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        enterLayoutSpace();
+        return;
+      }
+
+      if (!layoutMode) return;
+
+      const k = e.key && e.key.toLowerCase();
+      if (!['w', 'a', 's', 'd'].includes(k)) return;
+      if (e.ctrlKey || e.metaKey) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (layoutMode === 'align') {
+        if (k === 'w') alignSelection('top');
+        else if (k === 'a') alignSelection('left');
+        else if (k === 's') alignSelection('bottom');
+        else if (k === 'd') alignSelection('right');
+      } else {
+        if (k === 'w' || k === 's') spaceVerticalEqualGap(layoutPreview.gap);
+        else spaceHorizontalEqualGap(layoutPreview.gap);
+      }
+
+      layoutMode = null;
+      teardownLayoutPreview();
+      logLayoutMode();
+    },
+    true
+  );
+
+  // ============================================
+  // STEP 7: Box selection — Ctrl+B one-shot overlay OR Shift+empty-drag (Blockly gesture patch)
+  // ============================================
+  let boxSelectState = {
+    active: false,
+    source: null,
+    startPos: null,
+    currentPos: null,
+    overlay: null,
+    rectElement: null,
+    workspace: null,
+    downHandler: null,
+    moveHandler: null,
+    upHandler: null
+  };
+
+  const createBoxSelectOverlay = (workspace) => {
+    const svg = workspace.getParentSvg();
+    if (!svg) return null;
+
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('fill', 'rgba(66, 133, 244, 0.1)');
+    rect.setAttribute('stroke', '#4285f4');
+    rect.setAttribute('stroke-width', '2');
+    rect.setAttribute('stroke-dasharray', '5,5');
+    rect.style.pointerEvents = 'none';
+    rect.style.display = 'none';
+
+    const svgGroup = svg.querySelector('.blocklyBlockCanvas') || svg;
+    svgGroup.appendChild(rect);
+
+    return rect;
+  };
+
+  const updateBoxSelectRect = () => {
+    if (!boxSelectState.rectElement || !boxSelectState.startPos || !boxSelectState.currentPos) {
+      return;
+    }
+
+    const start = boxSelectState.startPos;
+    const current = boxSelectState.currentPos;
+
+    const x = Math.min(start.x, current.x);
+    const y = Math.min(start.y, current.y);
+    const width = Math.abs(current.x - start.x);
+    const height = Math.abs(current.y - start.y);
+
+    boxSelectState.rectElement.setAttribute('x', x);
+    boxSelectState.rectElement.setAttribute('y', y);
+    boxSelectState.rectElement.setAttribute('width', width);
+    boxSelectState.rectElement.setAttribute('height', height);
+    boxSelectState.rectElement.style.display = width > 0 && height > 0 ? 'block' : 'none';
+  };
+
+  const screenToWorkspaceCoords = (workspace, clientX, clientY) => {
+    const svg = workspace.getParentSvg();
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: clientX, y: clientY };
+
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const svgPt = pt.matrixTransform(ctm.inverse());
+    const origin = workspace.getOriginOffsetInPixels();
+
+    return {
+      x: (svgPt.x - origin.x) / workspace.scale,
+      y: (svgPt.y - origin.y) / workspace.scale
+    };
+  };
+
+  // Replace vs add: Shift at mouseup (e.shiftKey) — independent of Shift held to start Shift+empty-drag
+  const applyMarqueeSelection = (e, workspace, start, current) => {
+    const boxLeft = Math.min(start.x, current.x);
+    const boxRight = Math.max(start.x, current.x);
+    const boxTop = Math.min(start.y, current.y);
+    const boxBottom = Math.max(start.y, current.y);
+
+    if (Math.abs(boxRight - boxLeft) > 5 && Math.abs(boxBottom - boxTop) > 5) {
+      const Rect = Blockly.utils.Rect;
+      const selectionBox = new Rect(boxTop, boxBottom, boxLeft, boxRight);
+      const allBlocks = workspace.getAllBlocks(false);
+      const selectedBlocks = [];
+
+      allBlocks.forEach(block => {
+        if (!block || block.isShadow() || block.isInsertionMarker()) return;
+
+        try {
+          const blockBounds = block.getBoundingRectangle();
+          if (blockBounds && selectionBox.intersects(blockBounds)) {
+            selectedBlocks.push(block);
+          }
+        } catch (err) {
+          // Skip blocks that don't have bounding rectangle
+        }
+      });
+
+      if (selectedBlocks.length > 0) {
+        if (!e.shiftKey) {
+          window.__multiSelectedBlocks.forEach(block => {
+            if (block.removeSelect) block.removeSelect();
+          });
+          window.__multiSelectedBlocks = [];
+        }
+
+        selectedBlocks.forEach(block => {
+          if (window.__multiSelectedBlocks.indexOf(block) === -1) {
+            window.__multiSelectedBlocks.push(block);
+            block.addSelect();
+          }
+        });
+
+        if (selectedBlocks.length > 0) {
+          Blockly.common.setSelected(selectedBlocks[selectedBlocks.length - 1]);
+        }
+
+        console.log(\`[Multi-Select] Box selected \${selectedBlocks.length} blocks\`);
+      }
+    }
+  };
+
+  const beginMarquee = (workspace, startClientX, startClientY, e, source) => {
+    boxSelectState.source = source;
+    boxSelectState.workspace = workspace;
+    if (source === 'shiftDrag') {
+      boxSelectState.active = true;
+    }
+
+    const startCoord = screenToWorkspaceCoords(workspace, startClientX, startClientY);
+    boxSelectState.startPos = startCoord;
+    boxSelectState.currentPos = screenToWorkspaceCoords(workspace, e.clientX, e.clientY);
+
+    if (!boxSelectState.rectElement) {
+      boxSelectState.rectElement = createBoxSelectOverlay(workspace);
+    }
+
+    if (boxSelectState.rectElement) {
+      boxSelectState.rectElement.style.display = 'block';
+      updateBoxSelectRect();
+    }
+  };
+
+  const startBoxSelect = (e, workspace) => {
+    if (!boxSelectState.active || !workspace) return;
+    beginMarquee(workspace, e.clientX, e.clientY, e, 'ctrlB');
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const updateBoxSelect = (e, workspace) => {
+    if (!boxSelectState.active || !boxSelectState.startPos || !workspace) return;
+
+    const coords = screenToWorkspaceCoords(workspace, e.clientX, e.clientY);
+    boxSelectState.currentPos = coords;
+    updateBoxSelectRect();
+  };
+
+  const cleanupShiftMarqueeState = () => {
+    if (boxSelectState.rectElement && boxSelectState.rectElement.parentNode) {
+      boxSelectState.rectElement.parentNode.removeChild(boxSelectState.rectElement);
+    }
+    boxSelectState.rectElement = null;
+    boxSelectState.startPos = null;
+    boxSelectState.currentPos = null;
+    boxSelectState.workspace = null;
+    boxSelectState.active = false;
+    boxSelectState.source = null;
+  };
+
+  const finalizeMarquee = (e, workspace) => {
+    if (!boxSelectState.active || !boxSelectState.startPos || !workspace) return;
+
+    const src = boxSelectState.source;
+    const start = boxSelectState.startPos;
+    const current = boxSelectState.currentPos;
+
+    if (boxSelectState.rectElement) {
+      boxSelectState.rectElement.style.display = 'none';
+    }
+
+    applyMarqueeSelection(e, workspace, start, current);
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (src === 'ctrlB') {
+      disableBoxSelectMode();
+    } else {
+      cleanupShiftMarqueeState();
+    }
+  };
+
+  const endBoxSelect = (e, workspace) => {
+    finalizeMarquee(e, workspace);
+  };
+
+  const enableBoxSelectMode = () => {
+    if (boxSelectState.active) return;
+
+    const workspace = Blockly.getMainWorkspace();
+    if (!workspace) {
+      console.warn('[Multi-Select] No workspace found for box selection');
+      return;
+    }
+
+    boxSelectState.active = true;
+    boxSelectState.source = 'ctrlB';
+    boxSelectState.workspace = workspace;
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:transparent;cursor:crosshair;pointer-events:auto;';
+    document.body.appendChild(overlay);
+    boxSelectState.overlay = overlay;
+
+    boxSelectState.downHandler = (e) => {
+      if (e.target === overlay || e.target.closest('.blocklySvg')) {
+        startBoxSelect(e, workspace);
+      }
+    };
+
+    boxSelectState.moveHandler = (e) => {
+      if (boxSelectState.startPos) {
+        updateBoxSelect(e, workspace);
+      }
+    };
+
+    boxSelectState.upHandler = (e) => {
+      if (boxSelectState.startPos) {
+        endBoxSelect(e, workspace);
+      }
+    };
+
+    overlay.addEventListener('mousedown', boxSelectState.downHandler, true);
+    document.addEventListener('mousemove', boxSelectState.moveHandler, true);
+    document.addEventListener('mouseup', boxSelectState.upHandler, true);
+
+    console.log('%c[Multi-Select] Box selection mode enabled. Drag once to select; mode turns off when you release.', 'color: #4285f4; font-weight: bold;');
+  };
+
+  const disableBoxSelectMode = () => {
+    if (!boxSelectState.active && !boxSelectState.overlay) return;
+
+    boxSelectState.active = false;
+    boxSelectState.source = null;
+
+    if (boxSelectState.overlay) {
+      if (boxSelectState.downHandler) {
+        boxSelectState.overlay.removeEventListener('mousedown', boxSelectState.downHandler, true);
+      }
+      if (boxSelectState.overlay.parentNode) {
+        boxSelectState.overlay.parentNode.removeChild(boxSelectState.overlay);
+      }
+      boxSelectState.overlay = null;
+    }
+
+    if (boxSelectState.moveHandler) {
+      document.removeEventListener('mousemove', boxSelectState.moveHandler, true);
+      boxSelectState.moveHandler = null;
+    }
+
+    if (boxSelectState.upHandler) {
+      document.removeEventListener('mouseup', boxSelectState.upHandler, true);
+      boxSelectState.upHandler = null;
+    }
+
+    if (boxSelectState.rectElement && boxSelectState.rectElement.parentNode) {
+      boxSelectState.rectElement.parentNode.removeChild(boxSelectState.rectElement);
+      boxSelectState.rectElement = null;
+    }
+
+    boxSelectState.startPos = null;
+    boxSelectState.currentPos = null;
+    boxSelectState.workspace = null;
+
+    console.log('[Multi-Select] Box selection mode disabled.');
+  };
+
+  window.__multiSelectMarquee = {
+    start: function (workspace, startClientX, startClientY, e) {
+      if (!workspace || !e) return;
+      beginMarquee(workspace, startClientX, startClientY, e, 'shiftDrag');
+    },
+    move: function (workspace, e) {
+      updateBoxSelect(e, workspace);
+    },
+    end: function (workspace, e) {
+      finalizeMarquee(e, workspace);
+    },
+    cancel: function (workspace) {
+      if (boxSelectState.source === 'shiftDrag' && boxSelectState.active) {
+        cleanupShiftMarqueeState();
+      }
+    }
+  };
+
+  const originalUpdateIsDraggingWorkspace = Blockly.Gesture.prototype.updateIsDraggingWorkspace_;
+  Blockly.Gesture.prototype.updateIsDraggingWorkspace_ = function () {
+    if (
+      this.__shiftEmptyMarquee_ &&
+      this.startWorkspace_ &&
+      !this.flyout_ &&
+      !this.targetBlock_
+    ) {
+      this.isMarqueeSelect_ = true;
+      const md = this.mouseDownXY_;
+      if (window.__multiSelectMarquee && window.__multiSelectMarquee.start && md) {
+        window.__multiSelectMarquee.start(
+          this.startWorkspace_,
+          md.x,
+          md.y,
+          this.mostRecentEvent_
+        );
+      }
+      return;
+    }
+    return originalUpdateIsDraggingWorkspace.call(this);
+  };
+
+  const originalGestureHandleMove = Blockly.Gesture.prototype.handleMove;
+  Blockly.Gesture.prototype.handleMove = function (e) {
+    if (this.isMarqueeSelect_) {
+      this.updateFromEvent_(e);
+      if (window.__multiSelectMarquee && window.__multiSelectMarquee.move) {
+        window.__multiSelectMarquee.move(this.startWorkspace_, e);
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    return originalGestureHandleMove.call(this, e);
+  };
+
+  const originalGestureHandleUp = Blockly.Gesture.prototype.handleUp;
+  Blockly.Gesture.prototype.handleUp = function (e) {
+    if (this.isMarqueeSelect_) {
+      this.updateFromEvent_(e);
+      if (Blockly.Touch) Blockly.Touch.longStop();
+      if (this.isEnding_) {
+        return;
+      }
+      this.isEnding_ = true;
+      if (window.__multiSelectMarquee && window.__multiSelectMarquee.end) {
+        window.__multiSelectMarquee.end(this.startWorkspace_, e);
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      this.dispose();
+      return;
+    }
+    return originalGestureHandleUp.call(this, e);
+  };
+
+  const originalGestureCancel = Blockly.Gesture.prototype.cancel;
+  Blockly.Gesture.prototype.cancel = function () {
+    if (this.isEnding_) {
+      return;
+    }
+    if (this.isMarqueeSelect_) {
+      if (Blockly.Touch) Blockly.Touch.longStop();
+      if (window.__multiSelectMarquee && window.__multiSelectMarquee.cancel) {
+        window.__multiSelectMarquee.cancel(this.startWorkspace_);
+      }
+      this.isEnding_ = true;
+      this.dispose();
+      return;
+    }
+    return originalGestureCancel.call(this);
+  };
+
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'b') {
+      if (isTypingTargetLayout(e.target)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (boxSelectState.active && boxSelectState.source === 'ctrlB') {
+        disableBoxSelectMode();
+      } else if (!boxSelectState.active) {
+        enableBoxSelectMode();
+      }
+    }
+  }, true);
+
+  console.log('%c[Multi-Select] Enabled! Shift+Click, Shift+drag/Ctrl+B box, G drag, Shift+D dup 2+ roots (needs Shortcuts block), Shift+Q/E or Ctrl+Q/E align/spacing', 'color: #00c853; font-weight: bold;');
+  
+})();`;
+}
+</script>

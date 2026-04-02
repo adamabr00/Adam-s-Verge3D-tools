@@ -1,4 +1,4 @@
-<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+H to toggle local view - shows only the selected block and its connections. Press Shift+H again to show all blocks.">
+<template color="#05519A" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+H to toggle local view - shows only the selected block and its connections. Press Shift+H again to show all blocks.">
     <dummy>
         <label>Local View (Shift+H)</label>
     </dummy>
@@ -347,12 +347,14 @@ function code(block) {
     }
   }
 
+  window.__adamToggleLocalView = toggleLocalView;
+
   function handleKeyPress(event) {
-    // Check if Shift+H is pressed
-    // Don't trigger if user is typing in an input field
-    if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable) {
-      return;
-    }
+    const t = event.target;
+    const typing = typeof window.__adamIsTypingTarget === 'function'
+      ? window.__adamIsTypingTarget(t)
+      : !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || t.contentEditable === 'true'));
+    if (typing) return;
 
     // Check for Shift+H (keyCode 72 is H, or key === 'H'/'h' with shiftKey)
     if (event.shiftKey && (event.key === 'H' || event.key === 'h' || event.keyCode === 72)) {

@@ -1,4 +1,4 @@
-<template color="#4a90e2" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+C to convert mathematical expressions into blocks. Supports arithmetic, logical operations, and variables.">
+<template color="#06388F" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+C to convert mathematical expressions into blocks. Supports arithmetic, logical operations, and variables.">
     <dummy>
         <label>Enable Math Expression Input (Shift+C)</label>
     </dummy>
@@ -17,6 +17,19 @@ function code(block) {
 
   if (window.__mathExpressionUIInitialized) return;
   window.__mathExpressionUIInitialized = true;
+
+  function adamTypingActive() {
+    const el = document.activeElement;
+    if (typeof window.__adamIsTypingTarget === 'function') {
+      return window.__adamIsTypingTarget(el);
+    }
+    return !!(el && (
+      el.tagName === 'INPUT' ||
+      el.tagName === 'TEXTAREA' ||
+      el.contentEditable === 'true' ||
+      el.isContentEditable
+    ));
+  }
 
   // Load math.js dynamically
   function loadMathJS(callback) {
@@ -1246,22 +1259,21 @@ function code(block) {
     });
   }
 
-  // Add keyboard shortcut: Shift+C
+  window.__adamOpenMathExpression = function () {
+    const open = document.getElementById('expressionOverlay');
+    if (open) {
+      open.remove();
+      return;
+    }
+    showExpressionInput();
+  };
+
+  // Add keyboard shortcut: Shift+C (toggle — same as floating toolbar)
   document.addEventListener('keydown', function(e) {
     if (e.key.toLowerCase() === 'c' && e.shiftKey) {
-      // Check if we're currently typing in an input field, textarea, or contenteditable element
-      const activeElement = document.activeElement;
-      const isTyping = activeElement && (
-        activeElement.tagName === 'INPUT' ||
-        activeElement.tagName === 'TEXTAREA' ||
-        activeElement.contentEditable === 'true' ||
-        activeElement.isContentEditable
-      );
-      
-      // Only trigger if we're not typing
-      if (!isTyping) {
+      if (!adamTypingActive()) {
         e.preventDefault();
-        showExpressionInput();
+        window.__adamOpenMathExpression();
         console.log('pressed Show');
       }
     }
