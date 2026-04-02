@@ -212,7 +212,7 @@ Provides an advanced search interface for finding puzzles across all tabs in the
 
 Provides a focused view mode that shows only the selected puzzle block and its connected blocks, hiding all others for visual clarity in cluttered workspaces.
 
-
+![LocalView](https://github.com/adamabr00/Adam-s-Verge3D-tools/blob/main/Gifs/Local%20View.gif?raw=true )
 
 **Key Features:**
 
