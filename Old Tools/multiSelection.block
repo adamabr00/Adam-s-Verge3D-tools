@@ -1,0 +1,230 @@
+<template color="#4a90e2" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Enables multi-selection in the Puzzles editor: Ctrl+Click to select multiple blocks, Shift+Click to add to selection.">
+    <dummy>
+        <label>Multi-Selection Mode (Ctrl+Click, Shift+Click)</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `(function() {
+  // ✅ Check if URL contains 'logic' parameter
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('logic')) {
+    return;
+  }
+
+  // Simple Multi-Selection Plugin for Verge3D Blockly
+  class MultiSelectionPlugin {
+    constructor() {
+      this.selectedBlocks = new Set();
+      this.isInitialized = false;
+      
+      this.init();
+    }
+
+    init() {
+      if (this.isInitialized) return;
+      
+      // Wait for Blockly to be fully loaded
+      if (typeof Blockly === 'undefined') {
+        setTimeout(() => this.init(), 100);
+        return;
+      }
+
+      this.setupEventListeners();
+      this.isInitialized = true;
+      
+      console.log('Multi-Selection Plugin initialized');
+    }
+
+    setupEventListeners() {
+      const workspace = Blockly.getMainWorkspace();
+      if (!workspace) {
+        console.log('No workspace found, retrying...');
+        setTimeout(() => this.setupEventListeners(), 100);
+        return;
+      }
+
+      console.log('Setting up event listeners for workspace:', workspace.id);
+
+      // Listen for workspace changes to detect block clicks
+      workspace.addChangeListener(this.onWorkspaceChange.bind(this));
+      
+      // Track modifier keys globally
+      this.trackModifierKeys();
+    }
+
+    trackModifierKeys() {
+      // Track modifier key states globally
+      this.modifierKeys = {
+        ctrl: false,
+        meta: false,
+        shift: false
+      };
+      
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Control') this.modifierKeys.ctrl = true;
+        if (e.key === 'Meta') this.modifierKeys.meta = true;
+        if (e.key === 'Shift') this.modifierKeys.shift = true;
+      });
+      
+      document.addEventListener('keyup', (e) => {
+        if (e.key === 'Control') this.modifierKeys.ctrl = false;
+        if (e.key === 'Meta') this.modifierKeys.meta = false;
+        if (e.key === 'Shift') this.modifierKeys.shift = false;
+      });
+      
+      console.log('Modifier key tracking enabled');
+    }
+
+    onWorkspaceChange(e) {
+      console.log('Workspace change detected:', e.type, e.blockId);
+      
+      // Handle block selection events
+      if (e.type === 'click' && e.blockId) {
+        console.log('Block click event detected via workspace change');
+        this.handleBlockClickEvent(e);
+      }
+    }
+
+    handleBlockClickEvent(e) {
+      const workspace = Blockly.getMainWorkspace();
+      const block = workspace.getBlockById(e.blockId);
+      
+      if (!block) return;
+      
+      // Check if modifier keys are currently pressed
+      const isCtrlPressed = this.modifierKeys.ctrl || this.modifierKeys.meta;
+      const isShiftPressed = this.modifierKeys.shift;
+      
+      console.log('Handling block click event:', {
+        blockId: block.id,
+        isCtrlPressed,
+        isShiftPressed
+      });
+      
+      if (isCtrlPressed) {
+        console.log('Ctrl+Click detected - toggling selection for block:', block.id);
+        this.toggleBlockSelection(block);
+      } else if (isShiftPressed) {
+        console.log('Shift+Click detected - adding block to selection:', block.id);
+        this.addBlockToSelection(block);
+      } else {
+        console.log('Regular click detected - clearing selection and selecting single block');
+        this.clearSelection();
+        this.addBlockToSelection(block);
+      }
+    }
+
+    toggleBlockSelection(block) {
+      if (this.selectedBlocks.has(block)) {
+        this.removeBlockFromSelection(block);
+      } else {
+        this.addBlockToSelection(block);
+      }
+    }
+
+    addBlockToSelection(block) {
+      if (this.selectedBlocks.has(block)) {
+        console.log('Block already selected:', block.id);
+        return;
+      }
+      
+      console.log('Adding block to selection:', block.id);
+      this.selectedBlocks.add(block);
+      this.highlightBlock(block);
+      console.log('Total selected blocks:', this.selectedBlocks.size);
+    }
+
+    removeBlockFromSelection(block) {
+      if (!this.selectedBlocks.has(block)) {
+        console.log('Block not in selection:', block.id);
+        return;
+      }
+      
+      console.log('Removing block from selection:', block.id);
+      this.selectedBlocks.delete(block);
+      this.unhighlightBlock(block);
+      console.log('Total selected blocks:', this.selectedBlocks.size);
+    }
+
+    clearSelection() {
+      console.log('Clearing selection, was:', this.selectedBlocks.size, 'blocks');
+      this.selectedBlocks.forEach(block => {
+        this.unhighlightBlock(block);
+      });
+      this.selectedBlocks.clear();
+      console.log('Selection cleared');
+    }
+
+    highlightBlock(block) {
+      const blockSvg = block.getSvgRoot();
+      if (!blockSvg) {
+        console.log('No SVG root for block:', block.id);
+        return;
+      }
+      
+      console.log('Highlighting block:', block.id);
+      
+      // Add selection highlight
+      const highlight = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      highlight.setAttribute('class', 'multi-selection-highlight');
+      highlight.setAttribute('data-block-id', block.id);
+      highlight.setAttribute('fill', 'none');
+      highlight.setAttribute('stroke', '#4a90e2');
+      highlight.setAttribute('stroke-width', '3');
+      highlight.setAttribute('stroke-dasharray', '8,4');
+      highlight.setAttribute('rx', '4');
+      highlight.setAttribute('ry', '4');
+      
+      // Position the highlight
+      const blockRect = blockSvg.getBoundingClientRect();
+      const svgRect = Blockly.getMainWorkspace().getParentSvg().getBoundingClientRect();
+      
+      highlight.setAttribute('x', blockRect.left - svgRect.left - 2);
+      highlight.setAttribute('y', blockRect.top - svgRect.top - 2);
+      highlight.setAttribute('width', blockRect.width + 4);
+      highlight.setAttribute('height', blockRect.height + 4);
+      
+      Blockly.getMainWorkspace().getParentSvg().appendChild(highlight);
+      console.log('Highlight added for block:', block.id);
+    }
+
+    unhighlightBlock(block) {
+      console.log('Unhighlighting block:', block.id);
+      const highlights = Blockly.getMainWorkspace().getParentSvg().querySelectorAll('.multi-selection-highlight');
+      highlights.forEach(highlight => {
+        if (highlight.getAttribute('data-block-id') === block.id) {
+          if (highlight.parentNode) {
+            highlight.parentNode.removeChild(highlight);
+            console.log('Highlight removed for block:', block.id);
+          }
+        }
+      });
+    }
+
+    // Public API methods
+    getSelectedBlocks() {
+      return Array.from(this.selectedBlocks);
+    }
+
+    getSelectedCount() {
+      return this.selectedBlocks.size;
+    }
+
+    isBlockSelected(block) {
+      return this.selectedBlocks.has(block);
+    }
+  }
+
+  // Initialize the plugin
+  window.multiSelectionPlugin = new MultiSelectionPlugin();
+  
+  // Add global access methods
+  window.getSelectedBlocks = () => window.multiSelectionPlugin.getSelectedBlocks();
+  window.getSelectedCount = () => window.multiSelectionPlugin.getSelectedCount();
+  window.clearSelection = () => window.multiSelectionPlugin.clearSelection();
+
+})();`;
+}
+</script>

@@ -159,8 +159,6 @@ function code(block) {
   }
 
   function initProMinimap(workspace) {
-    console.log("%c[Pro Minimap] Initializing for new workspace...", "color:#a8a8b0;font-weight:bold;");
-
     const canvas = injectUI();
     const ctx = canvas.getContext('2d');
 
@@ -288,8 +286,6 @@ function code(block) {
     workspace.addChangeListener(()=>{
       if(!redrawPending){redrawPending=true;requestAnimationFrame(()=>{drawMinimap();redrawPending=false;});}
     });
-
-    console.log("%c[Pro Minimap] Ready for workspace.", "color:#a8a8b0;font-weight:bold;");
   }
 
   waitForBlockly();

@@ -1,0 +1,83 @@
+# Adding Shortcuts to Blockly V8 (Verge3D Puzzles)
+
+This guide summarizes how to add or modify keyboard shortcuts in **Blockly V8**, as used in Verge3D’s Puzzle editor.
+
+---
+
+## ✅ Key Concepts
+
+- Shortcuts are managed by `Blockly.ShortcutRegistry.registry`.
+- This object contains:
+  - `registry_` → list of registered shortcuts and their callbacks.
+  - `keyMap_` → maps **key codes** or combinations to shortcut names.
+
+---
+
+## ✅ Key Learnings
+
+### 1. Key Mapping Uses Numeric Key Codes
+- Use numeric strings instead of characters.
+  - Example:
+    - `C` → `"67"`
+    - `X` → `"88"`
+- Example mapping:
+  ```js
+  registry.addKeyMapping('88', 'delete');
+  ```
+
+---
+
+### 2. Reusing Existing Shortcuts
+- You can map a new key to an existing shortcut without re-registering:
+  ```js
+  const registry = Blockly.ShortcutRegistry.registry;
+  registry.addKeyMapping('88', 'delete'); // X now triggers delete
+  ```
+
+---
+
+### 3. Creating Custom Shortcuts
+- Register with `registry.register()` and then map with `addKeyMapping()`:
+  ```js
+  registry.register({
+    name: 'duplicate_block',
+    callback: function() {
+      const block = Blockly.selected; // get selected block
+      if (block) {
+        block.duplicate();
+        return true;
+      }
+      return false;
+    },
+    keyCodes: ['68'], // D key code
+    allowCollision: true
+  });
+  registry.addKeyMapping('68', 'duplicate_block');
+  ```
+
+---
+
+### 4. Getting the Selected Block
+- The `workspace` argument in the callback is **not** a real workspace.
+- Use:
+  ```js
+  const block = Blockly.selected;
+  ```
+
+---
+
+### 5. Overriding Existing Shortcuts
+- Remove the old one first, then register a new one:
+  ```js
+  registry.unregister('delete');
+  // re-register with custom behavior here
+  ```
+
+---
+
+## ✅ Conclusion
+For Blockly V8:
+- Always use **numeric key codes** in `addKeyMapping`.
+- Use `Blockly.selected` to interact with the selected block.
+- To reuse logic, simply map a new key to an existing shortcut name.
+- Custom shortcuts require explicit registration and mapping.

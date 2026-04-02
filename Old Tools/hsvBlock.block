@@ -1,0 +1,256 @@
+<template color="#8b5cf6">
+  <dummy>
+    <label>Augment getColorFromPicker with HSV + Eyedropper</label>
+  </dummy>
+</template>
+
+<script>
+(function(){
+  // --- small helpers ---
+  const clamp = (v,min,max)=>Math.min(max,Math.max(min,v));
+  const rgbToHex = (r,g,b)=>'#'+[r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+  const hexToRgb = (hex)=>{
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex||'');
+    return m? [parseInt(m[1],16),parseInt(m[2],16),parseInt(m[3],16)] : [255,102,0];
+  };
+  const hsvToRgb = (H,S,V)=>{
+    S/=100; V/=100;
+    const C=V*S, X=C*(1-Math.abs((H/60)%2-1)), m=V-C;
+    let r=0,g=0,b=0;
+    if (0<=H&&H<60){r=C;g=X;b=0;}
+    else if (60<=H&&H<120){r=X;g=C;b=0;}
+    else if (120<=H&&H<180){r=0;g=C;b=X;}
+    else if (180<=H&&H<240){r=0;g=X;b=C;}
+    else if (240<=H&&H<300){r=X;g=0;b=C;}
+    else {r=C;g=0;b=X;}
+    return [Math.round((r+m)*255),Math.round((g+m)*255),Math.round((b+m)*255)];
+  };
+  const rgbToHsv = (r,g,b)=>{
+    r/=255; g/=255; b/=255;
+    const max=Math.max(r,g,b), min=Math.min(r,g,b), d=max-min;
+    let h=0;
+    if (d){
+      if (max===r) h=60*(((g-b)/d)%6);
+      else if (max===g) h=60*(((b-r)/d)+2);
+      else h=60*(((r-g)/d)+4);
+    }
+    if (h<0) h+=360;
+    const s = max===0?0:(d/max)*100;
+    const v = max*100;
+    return [Math.round(h),Math.round(s),Math.round(v)];
+  };
+
+  // --- Extend Blockly's FieldColour to keep the exact swatch UI and codegen ---
+  if (!Blockly.FieldColour) {
+    console.warn('[visby_color_plus] Blockly.FieldColour not found. Nothing to augment.');
+    return;
+  }
+
+  class FieldColourPlus extends Blockly.FieldColour {
+    static fromJson(options){ return new FieldColourPlus(options['colour']); }
+
+    // We inject our panel *below* the built-in swatches.
+    showEditor_() {
+      // Open the standard colour dropdown first (keeps Verge3D look & palette).
+      super.showEditor_();
+
+      const DropDownDiv = Blockly.DropDownDiv;
+      const content = DropDownDiv.getContentDiv();
+
+      // Avoid double-injecting if user reopens.
+      if (content.querySelector('.visby-hsv-wrap')) return;
+
+      // Current value -> HSV
+      const [r0,g0,b0] = hexToRgb(this.getValue());
+      let [H,S,V] = rgbToHsv(r0,g0,b0);
+
+      // --- UI: compact HSV panel + Eyedropper ---
+      const wrap = document.createElement('div');
+      wrap.className = 'visby-hsv-wrap';
+      wrap.style.marginTop = '10px';
+      wrap.style.paddingTop = '10px';
+      wrap.style.borderTop = '1px solid #ddd';
+      wrap.style.font = '12px/1.2 system-ui, sans-serif';
+
+      const makeRow = (label, min, max, val) => {
+        const row = document.createElement('div');
+        row.style.display='grid';
+        row.style.gridTemplateColumns='24px 1fr 50px';
+        row.style.gap='6px';
+        row.style.alignItems='center';
+        row.style.margin='6px 0';
+
+        const lab = document.createElement('div');
+        lab.textContent = label; lab.style.color='#555';
+        const range = document.createElement('input');
+        range.type='range'; range.min=min; range.max=max; range.value=val; range.style.width='100%';
+        const box = document.createElement('input');
+        box.type='number'; box.min=min; box.max=max; box.value=val; box.style.width='50px';
+
+        row.appendChild(lab); row.appendChild(range); row.appendChild(box);
+        return {row, range, box};
+      };
+
+      const prev = document.createElement('div');
+      prev.style.height='34px';
+      prev.style.border='1px solid #999';
+      prev.style.borderRadius='6px';
+      prev.style.boxShadow='inset 0 0 0 1px rgba(0,0,0,.05)';
+      prev.style.margin='0 0 8px 0';
+
+      const hRow = makeRow('H', 0, 360, H);
+      const sRow = makeRow('S', 0, 100, S);
+      const vRow = makeRow('V', 0, 100, V);
+
+      const btns = document.createElement('div');
+      btns.style.display='flex';
+      btns.style.gap='8px';
+      btns.style.marginTop='8px';
+
+      const eye = document.createElement('button');
+      eye.textContent='Eyedropper';
+      const apply = document.createElement('button');
+      apply.textContent='Apply';
+      const toField = hex=>this.setValue(hex);
+
+      [eye, apply].forEach(b=>{
+        b.style.flex='1';
+        b.style.padding='6px 8px';
+        b.style.border='1px solid #aaa';
+        b.style.borderRadius='6px';
+        b.style.background='#f6f6f6';
+        b.style.cursor='pointer';
+      });
+
+      const syncPreview = ()=>{
+        H = clamp(parseInt(hRow.range.value||0),0,360);
+        S = clamp(parseInt(sRow.range.value||0),0,100);
+        V = clamp(parseInt(vRow.range.value||0),0,100);
+        hRow.box.value=H; sRow.box.value=S; vRow.box.value=V;
+        const [r,g,b] = hsvToRgb(H,S,V);
+        prev.style.background = rgbToHex(r,g,b);
+      };
+      const syncFromBox = (row,min,max)=>{
+        const v = clamp(parseFloat(row.box.value)||parseFloat(row.range.value), min, max);
+        row.range.value = v; row.box.value = v; syncPreview();
+      };
+
+      // Build panel
+      wrap.appendChild(prev);
+      wrap.appendChild(hRow.row);
+      wrap.appendChild(sRow.row);
+      wrap.appendChild(vRow.row);
+      btns.appendChild(eye);
+      btns.appendChild(apply);
+      wrap.appendChild(btns);
+      content.appendChild(wrap);
+
+      // Init + events
+      syncPreview();
+      [hRow.range, sRow.range, vRow.range].forEach(r=>r.addEventListener('input', syncPreview));
+      hRow.box.addEventListener('change', ()=>syncFromBox(hRow,0,360));
+      sRow.box.addEventListener('change', ()=>syncFromBox(sRow,0,100));
+      vRow.box.addEventListener('change', ()=>syncFromBox(vRow,0,100));
+
+      // Clicking "Apply" updates the field (and built-in preview/swatch above).
+      apply.addEventListener('click', ()=>{
+        const [r,g,b] = hsvToRgb(H,S,V);
+        toField(rgbToHex(r,g,b));
+      });
+
+      // Native browser EyeDropper API
+      eye.addEventListener('click', async ()=>{
+        if (!window.EyeDropper) {
+          alert('Eyedropper not supported in this browser. Try Chrome/Edge 95+.'); return;
+        }
+        try {
+          const ed = new EyeDropper();
+          const res = await ed.open(); // { sRGBHex: "#rrggbb" }
+          if (res && res.sRGBHex) {
+            const [r,g,b] = hexToRgb(res.sRGBHex);
+            const [h,s,v] = rgbToHsv(r,g,b);
+            hRow.range.value=h; sRow.range.value=s; vRow.range.value=v;
+            hRow.box.value=h;   sRow.box.value=s;   vRow.box.value=v;
+            syncPreview();
+            toField(res.sRGBHex);
+          }
+        } catch(e) { /* user canceled */ }
+      });
+
+      // Don’t let number fields trigger workspace shortcuts
+      [hRow.box,sRow.box,vRow.box].forEach(el=>el.addEventListener('keydown', ev=>ev.stopPropagation()));
+    }
+  }
+
+  // Register our enhanced field
+  Blockly.fieldRegistry.register('field_colour_plus', FieldColourPlus);
+
+  // --- Swap the field type in the existing getColorFromPicker block ---
+  // We wrap its init so it uses our field type while preserving everything else.
+  const patchBlock = ()=>{
+    const b = Blockly.Blocks && Blockly.Blocks['getColorFromPicker'];
+    if (!b || !b.init) return false;
+
+    const originalInit = b.init;
+    b.init = function() {
+      // Call original first so everything (message, style, output) is set
+      originalInit.call(this);
+
+      // Find "COLOR" field on the block and replace with our field
+      const oldField = this.getField('COLOR');
+      if (!oldField) return;
+
+      const currentHex = oldField.getValue ? oldField.getValue() : '#ff6600';
+
+      // Remove old field and insert new one at the same spot
+      const input = this.inputList[0] || this.getInputWithField_ && this.getInputWithField_('COLOR') || this.getInput('');
+      if (!input) return;
+
+      // Remove old field
+      input.removeField('COLOR', /* opt_quiet= */ true);
+
+      // Add our field (same name -> serialization stays identical)
+      const f = new FieldColourPlus(currentHex);
+      input.appendField(f, 'COLOR');
+    };
+
+    return true;
+  };
+
+  if (!patchBlock()) {
+    console.warn('[visby_color_plus] Could not patch getColorFromPicker. Registering fallback block "visby_getColor".');
+
+    // Fallback: new block that looks/behaves the same (outputs '#rrggbb')
+    Blockly.Blocks['visby_getColor'] = {
+      init: function() {
+        this.jsonInit({
+          "type":"visby_getColor",
+          "message0":"%1",
+          "args0":[{"type":"field_colour_plus","name":"COLOR","colour":"#ff6600"}],
+          "output":"Colour",
+          "colour":20,
+          "tooltip":"Pick a color (swatches) + HSV + Eyedropper",
+          "helpUrl":""
+        });
+      }
+    };
+    Blockly.JavaScript['visby_getColor'] = function(block){
+      const hex = block.getFieldValue('COLOR') || '#ffffff';
+      return [JSON.stringify(hex), Blockly.JavaScript.ORDER_ATOMIC];
+    };
+  }
+
+  // Light CSS touch
+  (function injectOnce(){
+    if (document.getElementById('visby-colour-plus-style')) return;
+    const style = document.createElement('style');
+    style.id='visby-colour-plus-style';
+    style.textContent = `
+      .blocklyDropDownDiv .visby-hsv-wrap .grid { display:grid; }
+      .blocklyWidgetDiv button:active { transform: translateY(1px); }
+    `;
+    document.head.appendChild(style);
+  })();
+
+})();
+</script>

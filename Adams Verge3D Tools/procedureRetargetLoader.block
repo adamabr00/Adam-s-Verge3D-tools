@@ -1,0 +1,364 @@
+<template color="#1a3a5c" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Editor: right-click a procedure *caller* block → Retarget all callers to… (all tabs). Requires ?logic. Chain in Master or add this block once.">
+    <dummy>
+        <label>Procedure retarget (editor context menu)</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `(function() {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has('logic')) {
+        return;
+    }
+    if (window.__adamProcedureRetargetLoaderInstalled) {
+        return;
+    }
+    window.__adamProcedureRetargetLoaderInstalled = true;
+
+    /**
+     * Blockly's Procedures.getDefinition calls Names.equals(defName, name) with no null checks.
+     * During tab switches / renames, onchange can run with getProcedureCall() === null or defs
+     * whose getProcedureDef()[0] is empty — which throws inside Names.equals (toLowerCase).
+     * Refcounted wrapper so nested retarget + move-to-tab can stack safely.
+     */
+    (function installSafeProcedureGetDefinition() {
+        var depth = 0;
+        var saved = null;
+        function safeImpl(name, workspace) {
+            if (name == null || name === '') return null;
+            var nameStr = typeof name === 'string' ? name : String(name);
+            if (nameStr.trim() === '') return null;
+            if (!workspace || typeof workspace.getAllBlocks !== 'function') return null;
+            var blocks = workspace.getAllBlocks(false);
+            for (var i = 0; i < blocks.length; i++) {
+                var block = blocks[i];
+                if (!block || !block.getProcedureDef) continue;
+                var defArr;
+                try {
+                    defArr = block.getProcedureDef();
+                } catch (e0) {
+                    continue;
+                }
+                if (!defArr) continue;
+                var d0 = defArr[0];
+                if (d0 == null || d0 === '') continue;
+                var d0s = typeof d0 === 'string' ? d0 : String(d0);
+                try {
+                    if (Blockly.Names.equals(d0s, nameStr)) return block;
+                } catch (e1) {
+                    continue;
+                }
+            }
+            return null;
+        }
+        window.__adamPushSafeProcedureGetDefinition = function() {
+            if (!Blockly.Procedures || typeof Blockly.Procedures.getDefinition !== 'function') return;
+            if (depth === 0) {
+                saved = Blockly.Procedures.getDefinition;
+                Blockly.Procedures.getDefinition = safeImpl;
+            }
+            depth++;
+        };
+        window.__adamPopSafeProcedureGetDefinition = function() {
+            if (depth <= 0) return;
+            depth--;
+            if (depth === 0 && saved && Blockly.Procedures) {
+                Blockly.Procedures.getDefinition = saved;
+                saved = null;
+            }
+        };
+    })();
+
+    /**
+     * Shared by Move-to-tab (procedure path) and this block. Idempotent.
+     */
+    window.__adamEnsureProcedureRetargetApi = function() {
+        if (window.__adamProcedureRetargetApi) {
+            return window.__adamProcedureRetargetApi;
+        }
+        var api = {};
+
+        function getAllLogicWorkspaces() {
+        var list = typeof Blockly.Workspace.getAll === 'function' ? Blockly.Workspace.getAll() : [];
+        var out = [];
+        for (var i = 0; i < list.length; i++) {
+            var w = list[i];
+            if (!w) continue;
+            try {
+                if (w.isFlyout || w.isMutator) continue;
+            } catch (e0) { continue; }
+            out.push(w);
+        }
+            return out;
+        }
+
+        function callerTypeMatchesDef(callerType, defBlock) {
+        if (!defBlock) return false;
+        var wantReturn = callerType === 'procedures_callreturn';
+        var isReturnDef = defBlock.type === 'procedures_defreturn';
+            return wantReturn === isReturnDef;
+        }
+
+        function validateRetarget(oldName, newName, callerType) {
+        if (window.__adamPushSafeProcedureGetDefinition) window.__adamPushSafeProcedureGetDefinition();
+        try {
+        var workspaces = getAllLogicWorkspaces();
+        var i;
+        var ws;
+        var callers;
+        var def;
+        for (i = 0; i < workspaces.length; i++) {
+            ws = workspaces[i];
+            if (!Blockly.Procedures || typeof Blockly.Procedures.getCallers !== 'function') {
+                return { ok: false, message: 'Blockly.Procedures.getCallers is not available.' };
+            }
+            callers = Blockly.Procedures.getCallers(oldName, ws);
+            if (!callers || callers.length === 0) continue;
+            def = Blockly.Procedures.getDefinition(newName, ws);
+            if (!def) {
+                return {
+                    ok: false,
+                    message: 'Procedure "' + newName + '" is not defined on a tab that still has callers of "' + oldName + '". Define it there first, or retarget in smaller steps.'
+                };
+            }
+            if (!callerTypeMatchesDef(callerType, def)) {
+                return {
+                    ok: false,
+                    message: 'Target "' + newName + '" must match caller type (procedure with return vs without return).'
+                };
+            }
+        }
+            return { ok: true };
+        } finally {
+            if (window.__adamPopSafeProcedureGetDefinition) window.__adamPopSafeProcedureGetDefinition();
+        }
+        }
+
+        function applyRetarget(oldName, newName) {
+        if (oldName == null || newName == null) return;
+        if (String(oldName).trim() === '' || String(newName).trim() === '') return;
+        if (window.__adamPushSafeProcedureGetDefinition) window.__adamPushSafeProcedureGetDefinition();
+        var workspaces = getAllLogicWorkspaces();
+        var wasGrouped = false;
+        try {
+            if (Blockly.Events && typeof Blockly.Events.getGroup === 'function') {
+                wasGrouped = Blockly.Events.getGroup();
+            }
+        } catch (eG) { wasGrouped = false; }
+        if (Blockly.Events && typeof Blockly.Events.setGroup === 'function') {
+            Blockly.Events.setGroup(true);
+        }
+        try {
+            var mutatedWs = {};
+            var wi;
+            var ws;
+            var callers;
+            var ci;
+            var caller;
+            var def;
+            for (wi = 0; wi < workspaces.length; wi++) {
+                ws = workspaces[wi];
+                callers = Blockly.Procedures.getCallers(oldName, ws);
+                if (!callers || callers.length === 0) continue;
+                for (ci = 0; ci < callers.length; ci++) {
+                    caller = callers[ci];
+                    if (!caller || caller.disposed) continue;
+                    if (typeof caller.renameProcedure === 'function') {
+                        caller.renameProcedure(oldName, newName);
+                    } else if (caller.setFieldValue) {
+                        caller.setFieldValue(newName, 'NAME');
+                    }
+                }
+                def = Blockly.Procedures.getDefinition(newName, ws);
+                if (def && typeof BlocklyExt !== 'undefined' && BlocklyExt.Procedures &&
+                    typeof BlocklyExt.Procedures.unproxifyBlock === 'function') {
+                    try {
+                        def = BlocklyExt.Procedures.unproxifyBlock(def);
+                    } catch (eU) { /* keep def */ }
+                }
+                if (def && def.workspace === ws && typeof Blockly.Procedures.mutateCallers === 'function') {
+                    mutatedWs[ws.id] = def;
+                }
+            }
+            for (var wid in mutatedWs) {
+                if (!mutatedWs.hasOwnProperty(wid)) continue;
+                try {
+                    Blockly.Procedures.mutateCallers(mutatedWs[wid]);
+                } catch (eM) { /* signature already matched */ }
+            }
+            for (wi = 0; wi < workspaces.length; wi++) {
+                ws = workspaces[wi];
+                if (ws.refreshToolboxSelection) {
+                    try { ws.refreshToolboxSelection(); } catch (eR) { /* */ }
+                }
+            }
+        } finally {
+            if (Blockly.Events && typeof Blockly.Events.setGroup === 'function') {
+                Blockly.Events.setGroup(wasGrouped);
+            }
+            if (window.__adamPopSafeProcedureGetDefinition) window.__adamPopSafeProcedureGetDefinition();
+        }
+        }
+
+        api.getAllLogicWorkspaces = getAllLogicWorkspaces;
+        api.callerTypeMatchesDef = callerTypeMatchesDef;
+        api.validateRetarget = validateRetarget;
+        api.applyRetarget = applyRetarget;
+        window.__adamProcedureRetargetApi = api;
+        return api;
+    };
+
+    window.__adamEnsureProcedureRetargetApi();
+
+    function promptRetargetFromBlock(block) {
+        if (!block || block.disposed) return;
+        var callerType = block.type;
+        if (callerType !== 'procedures_callnoreturn' && callerType !== 'procedures_callreturn') return;
+        var oldName = block.getFieldValue('NAME');
+        if (oldName == null || String(oldName).trim() === '') {
+            window.alert('This caller has no procedure name.');
+            return;
+        }
+        var hint = 'Enter the exact procedure name to point ALL callers of "' + oldName + '" to (all tabs).\\n\\nTarget must already exist and match type (with / without return).';
+        var newName = window.prompt(hint, oldName);
+        if (newName == null) return;
+        newName = String(newName).trim();
+        if (newName === '' || newName === oldName) return;
+
+        var api = window.__adamProcedureRetargetApi;
+        var v = api.validateRetarget(oldName, newName, callerType);
+        if (!v.ok) {
+            window.alert(v.message || 'Cannot retarget.');
+            return;
+        }
+        api.applyRetarget(oldName, newName);
+    }
+
+    /**
+     * Blockly 9+ builds block menus from ContextMenuRegistry and then calls
+     * block.customContextMenu — but customContextMenu was copied onto each BlockSvg
+     * at construction, so patching Blockly.Blocks[type].customContextMenu does NOT
+     * affect existing procedure caller blocks. Register a BLOCK scope item instead
+     * (same pattern as Verge3D printPuzzleXMLTree in contextmenu.js).
+     */
+    function registerProcedureRetargetRegistryItem() {
+        if (window.__adamProcedureRetargetRegistryRegistered) return;
+        var reg = Blockly.ContextMenuRegistry && Blockly.ContextMenuRegistry.registry;
+        if (!reg || typeof reg.register !== 'function') {
+            console.warn('[Procedure retarget] ContextMenuRegistry not available.');
+            return;
+        }
+        try {
+            reg.register({
+                id: 'adamRetargetProcedureCallers',
+                scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+                weight: 6.45,
+                preconditionFn: function(scope) {
+                    var b = scope && scope.block;
+                    if (!b || b.isInFlyout) return 'hidden';
+                    var t = b.type;
+                    if (t !== 'procedures_callnoreturn' && t !== 'procedures_callreturn') {
+                        return 'hidden';
+                    }
+                    return 'enabled';
+                },
+                displayText: function(scope) {
+                    var b = scope && scope.block;
+                    var name = b && b.getFieldValue && b.getFieldValue('NAME');
+                    if (name != null && name !== '') {
+                        return 'Retarget all callers of "' + name + '" to…';
+                    }
+                    return 'Retarget all callers to…';
+                },
+                callback: function(scope) {
+                    var b = scope && scope.block;
+                    promptRetargetFromBlock(b);
+                }
+            });
+            window.__adamProcedureRetargetRegistryRegistered = true;
+        } catch (eReg) {
+            if (String(eReg && eReg.message || '').indexOf('already registered') !== -1) {
+                window.__adamProcedureRetargetRegistryRegistered = true;
+            } else {
+                console.warn('[Procedure retarget] Registry register failed:', eReg);
+            }
+        }
+    }
+
+    try {
+        registerProcedureRetargetRegistryItem();
+    } catch (eInstall) {
+        console.warn('[Procedure retarget] Could not install context menu:', eInstall);
+    }
+
+    /**
+     * Verge3D's blockly/main.js replaces Blockly.JavaScript['procedures_callnoreturn'/'callreturn']
+     * with wrappers that do defBlock.isEnabled() with NO null check (getDefinition can be null if
+     * the procedure def lives on another tab or was moved). Plugin code often runs before that
+     * patch — Verge3D then overwrites our guard. Re-install until the outermost wrapper is ours.
+     * Exposed for optional manual refresh after dynamic loads.
+     */
+    function installProcedureCallGeneratorNullGuard() {
+        if (typeof Blockly === 'undefined' || !Blockly.JavaScript || !Blockly.Procedures) return;
+        var JS = Blockly.JavaScript;
+        var ORDER_ATOMIC = typeof JS.ORDER_ATOMIC === 'number' ? JS.ORDER_ATOMIC : 0;
+
+        var nr = JS['procedures_callnoreturn'];
+        if (typeof nr === 'function' && !nr._adamNullGuardWrap) {
+            var innerNr = nr;
+            JS['procedures_callnoreturn'] = function(block) {
+                try {
+                    var defBlock = Blockly.Procedures.getDefinition(block.getFieldValue('NAME'), block.workspace);
+                    if (!defBlock) {
+                        return '(function(){})();\\n';
+                    }
+                    return innerNr.call(this, block);
+                } catch (eGuard) {
+                    return '(function(){})();\\n';
+                }
+            };
+            JS['procedures_callnoreturn']._adamNullGuardWrap = true;
+        }
+
+        var ret = JS['procedures_callreturn'];
+        if (typeof ret === 'function' && !ret._adamNullGuardWrap) {
+            var innerRet = ret;
+            JS['procedures_callreturn'] = function(block) {
+                try {
+                    var defBlock = Blockly.Procedures.getDefinition(block.getFieldValue('NAME'), block.workspace);
+                    if (!defBlock) {
+                        return ['null', ORDER_ATOMIC];
+                    }
+                    return innerRet.call(this, block);
+                } catch (eGuard2) {
+                    return ['null', ORDER_ATOMIC];
+                }
+            };
+            JS['procedures_callreturn']._adamNullGuardWrap = true;
+        }
+    }
+
+    window.__adamInstallProcedureCallGeneratorNullGuard = installProcedureCallGeneratorNullGuard;
+
+    installProcedureCallGeneratorNullGuard();
+    var adamGuardDelaysMs = [0, 50, 100, 200, 400, 800, 1600, 3200];
+    for (var adamDi = 0; adamDi < adamGuardDelaysMs.length; adamDi++) {
+        setTimeout(installProcedureCallGeneratorNullGuard, adamGuardDelaysMs[adamDi]);
+    }
+    if (typeof window !== 'undefined' && window.addEventListener) {
+        window.addEventListener('load', function adamProcNullGuardOnLoad() {
+            window.removeEventListener('load', adamProcNullGuardOnLoad);
+            setTimeout(installProcedureCallGeneratorNullGuard, 0);
+            var adamGi = 0;
+            var adamGid = setInterval(function () {
+                installProcedureCallGeneratorNullGuard();
+                if (++adamGi >= 48) {
+                    clearInterval(adamGid);
+                }
+            }, 125);
+        });
+    }
+})();`;
+}
+</script>

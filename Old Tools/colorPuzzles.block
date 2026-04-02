@@ -1,0 +1,337 @@
+<template color="#2aa198" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Colorize procedure blocks. Live panel at cursor; R=panel, R again=eyedropper; palette of recent colors; auto-applies; persists.">
+  <dummy>
+    <label>Block Colorizer (panel + palette, R + eyedropper, persistent)</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function () {
+    // Only in Puzzles editor
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('logic')) return;
+    if (window.__BlockColorizerInstalled) return;
+    window.__BlockColorizerInstalled = true;
+
+    const Blockly = window.Blockly;
+    if (!Blockly || !Blockly.ContextMenuRegistry || !Blockly.ShortcutRegistry) {
+      console.warn('[BlockColorizer] Blockly registries missing'); return;
+    }
+
+    // Target (procedures first; set to null for all)
+    const TARGET_TYPES = new Set([
+      'procedures_defnoreturn',
+      'procedures_defreturn',
+      'procedures_callnoreturn',
+      'procedures_callreturn'
+    ]);
+
+    const REG_SET = 'blockColorizer_set';
+    const REG_CLEAR = 'blockColorizer_clear';
+    const ScopeType = Blockly.ContextMenuRegistry.ScopeType;
+
+    let lastMouse = { x: Math.round(window.innerWidth/2), y: Math.round(window.innerHeight/2) };
+    const updateMouse = (e) => { if (e && typeof e.clientX === 'number') lastMouse = { x: e.clientX, y: e.clientY }; };
+    document.addEventListener('contextmenu', updateMouse, true);
+    document.addEventListener('pointerdown', updateMouse, true);
+    document.addEventListener('pointermove', updateMouse, true);
+
+    // ---------- helpers ----------
+    const isTarget = (b) => !TARGET_TYPES || TARGET_TYPES.has(b.type);
+    const normHex = (h) => {
+      if (!h) return null;
+      const m = h.trim().toLowerCase();
+      return m.startsWith('#') ? m : ('#' + m);
+    };
+
+    // Palette persistence
+    const PALETTE_KEY = 'blockcolorizer.palette';
+    const PALETTE_SIZE = 8;
+    function loadPalette() {
+      try {
+        const raw = localStorage.getItem(PALETTE_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.filter(x => /^#[0-9a-f]{6}$/.test(x)) : [];
+      } catch { return []; }
+    }
+    function savePalette(arr) {
+      try { localStorage.setItem(PALETTE_KEY, JSON.stringify(arr.slice(0, PALETTE_SIZE))); } catch {}
+    }
+    function rememberColor(hex) {
+      hex = normHex(hex);
+      if (!hex) return;
+      const cur = loadPalette();
+      const idx = cur.indexOf(hex);
+      if (idx !== -1) cur.splice(idx, 1);
+      cur.unshift(hex);
+      savePalette(cur.slice(0, PALETTE_SIZE));
+    }
+
+    function getDataObj(block) { try { return block.data ? JSON.parse(block.data) : {}; } catch(_) { return {}; } }
+    function setDataObj(block, obj) { block.data = JSON.stringify(obj); }
+    function applyVisualColour(block, hex) {
+      if (typeof block.setColour === 'function') block.setColour(hex || undefined);
+      else if (block.style && hex) {
+        block.style.colourPrimary = hex; block.style.colourSecondary = hex; block.style.colourTertiary = hex;
+        block.render && block.render();
+      }
+    }
+    function getProcNameFromDef(defBlock) {
+      const f = defBlock.getField && defBlock.getField('NAME'); if (f) return f.getText();
+      if (defBlock.mutationToDom) { const m = defBlock.mutationToDom(); if (m && m.getAttribute) return m.getAttribute('name'); }
+      return null;
+    }
+    function findProcedureCallBlocks(ws, procName) {
+      const out = [];
+      for (const b of ws.getAllBlocks(false)) {
+        if (b.type !== 'procedures_callnoreturn' && b.type !== 'procedures_callreturn') continue;
+        const f = b.getField && b.getField('NAME'); const nameField = f ? f.getText() : null;
+        let mutName = null; if (b.mutationToDom) { const m = b.mutationToDom(); if (m && m.getAttribute) mutName = m.getAttribute('name'); }
+        const callName = nameField || mutName; if (callName === procName) out.push(b);
+      }
+      return out;
+    }
+    function setBlockColor(block, hex, { propagate = true } = {}) {
+      hex = normHex(hex);
+      applyVisualColour(block, hex);
+      const d = getDataObj(block); if (hex) d._bcolor = hex; else delete d._bcolor; setDataObj(block, d);
+      if (propagate && (block.type === 'procedures_defnoreturn' || block.type === 'procedures_defreturn')) {
+        const ws = block.workspace, name = getProcNameFromDef(block);
+        if (ws && name) {
+          for (const c of findProcedureCallBlocks(ws, name)) {
+            applyVisualColour(c, hex);
+            const cd = getDataObj(c); if (hex) cd._bcolor = hex; else delete cd._bcolor; setDataObj(c, cd);
+          }
+          ws.render && ws.render();
+        }
+      }
+      if (hex) rememberColor(hex);
+    }
+    function applySavedColor(block) {
+      const d = getDataObj(block);
+      if (d && d._bcolor) setBlockColor(block, d._bcolor, { propagate: false });
+    }
+    function hexOrDefault(block) {
+      const d = getDataObj(block); if (d && d._bcolor) return d._bcolor;
+      const c = (typeof block.getColour === 'function') ? block.getColour() : null;
+      if (c && /^#?[0-9a-f]{6}$/i.test(c)) return normHex(c);
+      return '#4a90e2';
+    }
+
+    // ---------- floating panel (keeps page focus) ----------
+    let _panel = null; // {wrap,input,ok,cancel,eyedropper,cleanup}
+
+    function closePanel(commitHex, block) {
+      if (!_panel) return;
+      const ws = block.workspace;
+      if (commitHex) { setBlockColor(block, commitHex, { propagate: true }); ws && ws.render && ws.render(); }
+      else { const d = getDataObj(block); applyVisualColour(block, d._bcolor || null); ws && ws.render && ws.render(); }
+      _panel.cleanup(); _panel = null;
+    }
+
+    async function eyedropperPickAndMaybeCommit(block) {
+      if (!('EyeDropper' in window)) return;
+      try {
+        const ed = new window.EyeDropper();
+        const res = await ed.open();
+        if (res && res.sRGBHex) closePanel(res.sRGBHex, block);
+      } catch(_) { /* cancel */ }
+    }
+
+    function renderPalette(container, forBlock) {
+      // Clear previous
+      container.innerHTML = '';
+      const colors = loadPalette();
+      if (!colors.length) { container.style.display = 'none'; return; }
+      container.style.display = 'flex';
+      for (const hex of colors) {
+        const sw = document.createElement('button');
+        sw.title = hex;
+        Object.assign(sw.style, {
+          width: '18px', height: '18px', borderRadius: '4px',
+          border: '1px solid rgba(255,255,255,0.35)',
+          background: hex, cursor: 'pointer', padding: '0', margin: '0'
+        });
+        sw.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closePanel(hex, forBlock); // instant commit & propagate
+        });
+        // Optional hover preview:
+        sw.addEventListener('mouseenter', () => {
+          const ws = forBlock.workspace;
+          const isDef = (forBlock.type === 'procedures_defnoreturn' || forBlock.type === 'procedures_defreturn');
+          applyVisualColour(forBlock, hex);
+          if (isDef && ws) {
+            const name = getProcNameFromDef(forBlock);
+            for (const c of findProcedureCallBlocks(ws, name)) applyVisualColour(c, hex);
+          }
+          ws && ws.render && ws.render();
+        });
+        container.appendChild(sw);
+      }
+    }
+
+    function showPanelForBlock(b) {
+      if (_panel) { _panel.input && _panel.input.focus(); return; }
+
+      const ws = b.workspace;
+      const isDef = (b.type === 'procedures_defnoreturn' || b.type === 'procedures_defreturn');
+      const procName = isDef ? getProcNameFromDef(b) : null;
+      const original = hexOrDefault(b);
+
+      // Create wrapper
+      const wrap = document.createElement('div');
+      Object.assign(wrap.style, {
+        position: 'fixed',
+        left: Math.max(8, lastMouse.x + 10) + 'px',
+        top:  Math.max(8, lastMouse.y + 10) + 'px',
+        padding: '8px',
+        background: 'rgba(32,32,32,0.95)',
+        border: '1px solid rgba(255,255,255,0.15)',
+        borderRadius: '8px',
+        boxShadow: '0 6px 24px rgba(0,0,0,0.35)',
+        zIndex: '2147483647',
+        color: '#fff',
+        font: '12px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial'
+      });
+
+      // Palette row
+      const palWrap = document.createElement('div');
+      Object.assign(palWrap.style, { display:'flex', gap:'6px', marginBottom:'6px' });
+      wrap.appendChild(palWrap);
+      renderPalette(palWrap, b);
+
+      // Controls row
+      const row = document.createElement('div');
+      Object.assign(row.style, { display:'flex', gap:'8px', alignItems:'center' });
+
+      const input = document.createElement('input');
+      input.type = 'color'; input.value = original;
+      Object.assign(input.style, { width:'36px', height:'24px' }); input.title='Pick color';
+
+      const eyedropBtn = document.createElement('button');
+      eyedropBtn.textContent = 'Eyedropper (R)';
+      Object.assign(eyedropBtn.style, { background:'#444', color:'#fff', border:'0', padding:'6px 8px', borderRadius:'6px', cursor:'pointer' });
+
+      const okBtn = document.createElement('button');
+      okBtn.textContent = 'OK (Enter)';
+      Object.assign(okBtn.style, { background:'#2d7', color:'#102', border:'0', padding:'6px 8px', borderRadius:'6px', fontWeight:'600', cursor:'pointer' });
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Cancel (Esc)';
+      Object.assign(cancelBtn.style, { background:'#555', color:'#fff', border:'0', padding:'6px 8px', borderRadius:'6px', cursor:'pointer' });
+
+      row.appendChild(input); row.appendChild(eyedropBtn); row.appendChild(okBtn); row.appendChild(cancelBtn);
+      wrap.appendChild(row);
+      document.body.appendChild(wrap);
+
+      // live preview
+      const preview = (hex) => {
+        if (!hex) return;
+        applyVisualColour(b, hex);
+        if (isDef && ws && procName) for (const c of findProcedureCallBlocks(ws, procName)) applyVisualColour(c, hex);
+        ws && ws.render && ws.render();
+      };
+
+      const onInput = () => preview(input.value);
+      input.addEventListener('input', onInput, { passive:true });
+
+      const commit = () => closePanel(input.value, b);
+      const cancel = () => closePanel(null, b);
+
+      okBtn.addEventListener('click', commit);
+      cancelBtn.addEventListener('click', cancel);
+      eyedropBtn.addEventListener('click', () => eyedropperPickAndMaybeCommit(b));
+
+      // click outside cancels
+      const onDocDown = (e) => { if (!_panel) return; if (!wrap.contains(e.target)) cancel(); };
+      setTimeout(()=>document.addEventListener('mousedown', onDocDown, true), 0);
+
+      // keyboard inside panel
+      const onKey = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        else if (e.key.toLowerCase() === 'r') { e.preventDefault(); eyedropperPickAndMaybeCommit(b); }
+      };
+      wrap.addEventListener('keydown', onKey);
+
+      _panel = {
+        wrap, input,
+        cleanup() {
+          document.removeEventListener('mousedown', onDocDown, true);
+          wrap.removeEventListener('keydown', onKey);
+          try { wrap.remove(); } catch(_) {}
+        }
+      };
+
+      input.focus(); preview(original);
+    }
+
+    // ---------- context menu ----------
+    const cmReg = Blockly.ContextMenuRegistry.registry;
+    try { cmReg.unregister(REG_SET); } catch(_) {}
+    try { cmReg.unregister(REG_CLEAR); } catch(_) {}
+
+    cmReg.register({
+      id: REG_SET,
+      scopeType: ScopeType.BLOCK,
+      weight: 100,
+      displayText: () => 'Set color…',
+      preconditionFn: (scope) => (scope && scope.block && isTarget(scope.block)) ? 'enabled' : 'hidden',
+      callback: (scope) => showPanelForBlock(scope.block)
+    });
+
+    cmReg.register({
+      id: REG_CLEAR,
+      scopeType: ScopeType.BLOCK,
+      weight: 101,
+      displayText: () => 'Clear color',
+      preconditionFn: (scope) => {
+        const b = scope && scope.block; if (!b || !isTarget(b)) return 'hidden';
+        const d = getDataObj(b); return d && d._bcolor ? 'enabled' : 'disabled';
+      },
+      callback: (scope) => { const b = scope.block; setBlockColor(b, null, { propagate: true }); b.workspace && b.workspace.render(); }
+    });
+
+    // ---------- persistence ----------
+    function installWorkspaceHooks(ws) {
+      if (!ws || ws.__blockColorizerInstalled) return;
+      ws.__blockColorizerInstalled = true;
+      ws.getAllBlocks(false).forEach((b) => { if (isTarget(b)) applySavedColor(b); });
+      ws.addChangeListener((ev) => {
+        if (ev.type === Blockly.Events.BLOCK_CREATE) {
+          const ids = ev.ids || (ev.blockId ? [ev.blockId] : []);
+          for (const id of ids) { const b = ws.getBlockById(id); if (b && isTarget(b)) applySavedColor(b); }
+        } else if (ev.type === Blockly.Events.BLOCK_CHANGE && ev.element === 'data') {
+          const b = ws.getBlockById(ev.blockId); if (b && isTarget(b)) applySavedColor(b);
+        }
+      });
+    }
+    function tryInit() {
+      const ws = window.workspace || (Blockly.getMainWorkspace && Blockly.getMainWorkspace()) || (Blockly.mainWorkspace || null);
+      if (!ws) { setTimeout(tryInit, 250); return; }
+      installWorkspaceHooks(ws);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tryInit); else tryInit();
+
+    // ---------- keyboard shortcut: R ----------
+    const sReg = Blockly.ShortcutRegistry.registry;
+    if (sReg.registry_['blockcolorizer_toggle']) sReg.unregister('blockcolorizer_toggle');
+    sReg.register({
+      name: 'blockcolorizer_toggle',
+      callback: function() {
+        const b = Blockly.selected;
+        if (!b || !isTarget(b)) return false;
+        if (_panel) { if ('EyeDropper' in window) eyedropperPickAndMaybeCommit(b); else _panel.input && _panel.input.focus(); return true; }
+        showPanelForBlock(b);
+        return true;
+      },
+      keyCodes: ['82'], // R
+      modifiers: [],
+      allowCollision: true
+    });
+    sReg.addKeyMapping('82', 'blockcolorizer_toggle');
+  })();`;
+}
+</script>

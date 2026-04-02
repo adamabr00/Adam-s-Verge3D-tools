@@ -1,0 +1,348 @@
+<template color="#1e88e5" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds multi-selection to the Puzzles editor: marquee (Shift+drag), Ctrl/⌘-click toggle, group move, bulk delete/duplicate/enable/disable, copy/paste.">
+  <dummy>
+    <label>Enable Multi-Select (marquee + group ops)</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function () {
+  // Activate only when ?logic is present (same convention as your other tools)
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('logic')) {
+    console.log('%c[Multi-Select] Skipped: no "logic" URL parameter.', 'color: orange; font-weight:bold;');
+    return;
+  }
+
+  // Safety checks
+  if (!window.Blockly || !Blockly.getMainWorkspace) {
+    console.warn('[Multi-Select] Blockly not ready.');
+    return;
+  }
+  const ws = Blockly.getMainWorkspace();
+  if (!ws) return;
+  if (ws.__multiselectInstalled) {
+    console.log('[Multi-Select] Already installed.');
+    return;
+  }
+  ws.__multiselectInstalled = true;
+
+  // -------------------------------
+  // Selection state + helpers
+  // -------------------------------
+  const selectedIds = new Set();
+  ws.__multi = {
+    clearSelection,
+    add(b){ selectBlock(b, true); },
+    remove(b){ deselectBlock(b); },
+    size(){ return selectedIds.size; },
+    forEachSelected(cb){
+      selectedIds.forEach(id => { const b = ws.getBlockById(id); if (b) cb(b); });
+    }
+  };
+
+  function blockSvgEl(block){ return block && (block.svgGroup_ || (block.svgPath_ && block.svgPath_.parentNode)) || null; }
+  function setClass(el, on){ if (el) el.classList.toggle('v3d-multiselect', !!on); }
+  function isSelected(block){ return !!(block && selectedIds.has(block.id)); }
+
+  function selectBlock(block, additive){
+    if (!block || block.isInsertionMarker && block.isInsertionMarker()) return;
+    if (!additive) clearSelection();
+    selectedIds.add(block.id);
+    setClass(blockSvgEl(block), true);
+  }
+  function deselectBlock(block){
+    if (!block) return;
+    selectedIds.delete(block.id);
+    setClass(blockSvgEl(block), false);
+  }
+  function clearSelection(){
+    if (!selectedIds.size) return;
+    ws.__isClearing = true;
+    selectedIds.forEach(id => {
+      const b = ws.getBlockById(id);
+      setClass(blockSvgEl(b), false);
+    });
+    selectedIds.clear();
+    ws.__isClearing = false;
+  }
+
+  // -------------------------------
+  // Visual style (outline/glow)
+  // -------------------------------
+  (function injectStyle(){
+    const style = document.createElement('style');
+    style.setAttribute('data-v3d-multiselect', '1');
+    style.textContent = [
+      '.v3d-multiselect .blocklyPath{',
+      '  stroke:#4da3ff;',
+      '  stroke-width:2px;',
+      '  stroke-linejoin:round;',
+      '  filter:drop-shadow(0 0 2px rgba(77,163,255,.6));',
+      '}'
+    ].join('\\n');
+    document.head.appendChild(style);
+  })();
+
+  // -------------------------------
+  // Sync with Blockly single-select
+  // Ctrl/Meta = additive toggle
+  // -------------------------------
+  ws.addChangeListener((ev) => {
+    if (ev.type !== Blockly.Events.SELECTED) return;
+    if (ws.__isClearing) return;
+    const block = ws.getBlockById(ev.newElementId);
+    const additive = !!ws.__lastClickAdditive;
+    if (block) {
+      if (additive) {
+        if (isSelected(block)) deselectBlock(block);
+        else selectBlock(block, true);
+      } else {
+        selectBlock(block, false);
+      }
+    } else if (!additive) {
+      clearSelection();
+    }
+  });
+
+  const inj = ws.getInjectionDiv();
+  inj.addEventListener('mousedown', (e) => {
+    ws.__lastClickAdditive = (e.ctrlKey || e.metaKey);
+    if (!ws.__lastClickAdditive && e.target.closest('.blocklySvg') && !e.shiftKey) {
+      // Clicking empty space (no modifiers) clears
+      clearSelection();
+    }
+  }, true);
+
+  // -------------------------------
+  // Marquee (Shift + drag on empty)
+  // -------------------------------
+  let marquee = null, dragOrigin = null;
+
+  function createMarquee(){
+    const svg = ws.getParentSvg();
+    marquee = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    marquee.setAttribute('fill','rgba(77,163,255,0.12)');
+    marquee.setAttribute('stroke','#4da3ff');
+    marquee.setAttribute('stroke-dasharray','4 2');
+    marquee.style.pointerEvents = 'none';
+    svg.appendChild(marquee);
+  }
+  function removeMarquee(){ if (marquee) marquee.remove(); marquee = null; }
+
+  inj.addEventListener('pointerdown', (e) => {
+    const hitBlock = e.target.closest('.blocklyBlockCanvas .blocklyDraggable');
+    if (!hitBlock && e.shiftKey) {
+      dragOrigin = { x:e.clientX, y:e.clientY };
+      createMarquee();
+    }
+  });
+
+  inj.addEventListener('pointermove', (e) => {
+    if (!dragOrigin || !marquee) return;
+    const x1 = Math.min(dragOrigin.x, e.clientX), y1 = Math.min(dragOrigin.y, e.clientY);
+    const x2 = Math.max(dragOrigin.x, e.clientX), y2 = Math.max(dragOrigin.y, e.clientY);
+
+    // Draw marquee in editor space
+    const m = ws.getMetrics();
+    marquee.setAttribute('x', x1 - m.absoluteLeft);
+    marquee.setAttribute('y', y1 - m.absoluteTop);
+    marquee.setAttribute('width',  Math.max(1, x2 - x1));
+    marquee.setAttribute('height', Math.max(1, y2 - y1));
+
+    // Hit-test in workspace coords
+    const pt1 = clientToWs(x1, y1), pt2 = clientToWs(x2, y2);
+    const aabb = { xMin:Math.min(pt1.x,pt2.x), yMin:Math.min(pt1.y,pt2.y), xMax:Math.max(pt1.x,pt2.x), yMax:Math.max(pt1.y,pt2.y) };
+
+    clearSelection();
+    ws.getAllBlocks(false).forEach(b => {
+      const r = getBlockRect(b);
+      if (rectsOverlap(aabb, r)) selectBlock(b, true);
+    });
+  });
+
+  inj.addEventListener('pointerup', () => { dragOrigin = null; removeMarquee(); });
+
+  function clientToWs(cx, cy){
+    const m = ws.getMetrics(), s = ws.scale;
+    return { x:(cx - m.absoluteLeft + ws.scrollX)/s, y:(cy - m.absoluteTop + ws.scrollY)/s };
+  }
+  function getBlockRect(b){
+    if (b.getBoundingRectangle) {
+      const r = b.getBoundingRectangle();
+      return { left:r.left, top:r.top, right:r.right, bottom:r.bottom };
+    }
+    const el = b && b.svgGroup_;
+    if (!el) return {left:0, right:0, top:0, bottom:0};
+    const bb = el.getBBox();
+    const p = b.getRelativeToSurfaceXY();
+    return { left:p.x, top:p.y, right:p.x+bb.width, bottom:p.y+bb.height };
+  }
+  function rectsOverlap(a,b){
+    return !(a.xMax < b.left || a.xMin > b.right || a.yMax < b.top || a.yMin > b.bottom);
+  }
+
+  // -------------------------------
+  // Group drag (move all selected)
+  // -------------------------------
+  let dragStart = null;
+  inj.addEventListener('pointerdown', (e) => {
+    const targetBlockEl = e.target.closest('.blocklyDraggable');
+    if (!targetBlockEl) return;
+    // Try to map element->block by walking up to a BlockSvg instance id if available
+    let block = null;
+    // Fast path: use Blockly's selected if this click just selected it
+    if (Blockly.selected) block = Blockly.selected;
+    // Fallback: iterate blocks to find one with matching SVG group
+    if (!block) {
+      const all = ws.getAllBlocks(false);
+      for (let i=0;i<all.length;i++){
+        if (all[i].svgGroup_ === targetBlockEl) { block = all[i]; break; }
+      }
+    }
+    if (!block) return;
+
+    if (!isSelected(block)) return; // let Blockly handle normal single drag
+    dragStart = { x:e.clientX, y:e.clientY };
+    e.stopImmediatePropagation(); // prevent Blockly's internal drag
+    e.preventDefault();
+  }, true);
+
+  inj.addEventListener('pointermove', throttle((e) => {
+    if (!dragStart) return;
+    const dx = (e.clientX - dragStart.x) / ws.scale;
+    const dy = (e.clientY - dragStart.y) / ws.scale;
+    if (Math.abs(dx)+Math.abs(dy) < 0.1) return;
+    Blockly.Events.setGroup(true);
+    ws.__multi.forEachSelected(b => b.moveBy(dx, dy));
+    Blockly.Events.setGroup(false);
+    dragStart = { x:e.clientX, y:e.clientY };
+  }, 16));
+
+  inj.addEventListener('pointerup', () => { dragStart = null; });
+
+  // -------------------------------
+  // Keyboard: Esc, Ctrl/⌘+A, Delete
+  // + Duplicate (Ctrl/⌘+D), Copy/Paste
+  // -------------------------------
+  inj.tabIndex = 0;
+  let clipboard = null;
+
+  inj.addEventListener('keydown', (e) => {
+    const meta = (e.ctrlKey || e.metaKey);
+    const K = (k) => e.key.toLowerCase() === k;
+
+    if (e.key === 'Escape') { clearSelection(); return; }
+
+    if (meta && K('a')) { // select all
+      e.preventDefault();
+      clearSelection();
+      ws.getAllBlocks(false).forEach(b => selectBlock(b, true));
+      return;
+    }
+
+    if (K('delete') || e.key === 'Backspace') { // delete
+      if (!selectedIds.size) return;
+      Blockly.Events.setGroup(true);
+      ws.__multi.forEachSelected(b => b.dispose(false, true));
+      Blockly.Events.setGroup(false);
+      clearSelection();
+      return;
+    }
+
+    if (meta && K('d')) { // duplicate
+      e.preventDefault();
+      duplicateSelection();
+      return;
+    }
+
+    if (meta && K('c')) { // copy
+      e.preventDefault();
+      copySelection();
+      return;
+    }
+
+    if (meta && K('v')) { // paste
+      e.preventDefault();
+      pasteSelection();
+      return;
+    }
+  });
+
+  function selectionAnchor(){
+    let xMin=Infinity, yMin=Infinity;
+    ws.__multi.forEachSelected(b => {
+      const p = b.getRelativeToSurfaceXY();
+      xMin = Math.min(xMin, p.x); yMin = Math.min(yMin, p.y);
+    });
+    return { xMin, yMin };
+  }
+
+  function copySelection(){
+    if (!ws.__multi.size()) return;
+    const anchor = selectionAnchor();
+    const payload = [];
+    ws.__multi.forEachSelected(b => {
+      const data = Blockly.serialization.blocks.save(b, { addCoordinates:true });
+      if (data && data.x != null && data.y != null) {
+        data.x -= anchor.xMin; data.y -= anchor.yMin;
+      }
+      payload.push(data);
+    });
+    clipboard = { payload, pasteN: 0 };
+  }
+
+  function pasteSelection(){
+    if (!clipboard) return;
+    clearSelection();
+    const offset = 24 * (clipboard.pasteN++ % 8);
+    Blockly.Events.setGroup(true);
+    clipboard.payload.forEach(data => {
+      const b = Blockly.serialization.blocks.append(
+        Object.assign({}, data, { x:(data.x||0)+offset, y:(data.y||0)+offset }),
+        ws
+      );
+      if (b) selectBlock(b, true);
+    });
+    Blockly.Events.setGroup(false);
+  }
+
+  function duplicateSelection(){ copySelection(); pasteSelection(); }
+
+  // -------------------------------
+  // Context menu: Enable/Disable/Clear
+  // -------------------------------
+  const registry = Blockly.ContextMenuRegistry.registry;
+  const mk = (id, label, cb, weight=100) => ({
+    id, weight, displayText: () => label,
+    preconditionFn: () => ws.__multi.size() > 1 ? 'enabled' : 'hidden',
+    callback: cb,
+    scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK
+  });
+
+  registry.register(mk('v3d-multi-disable', 'Disable Selected', () => {
+    Blockly.Events.setGroup(true);
+    ws.__multi.forEachSelected(b => b.setDisabled(true));
+    Blockly.Events.setGroup(false);
+  }));
+  registry.register(mk('v3d-multi-enable', 'Enable Selected', () => {
+    Blockly.Events.setGroup(true);
+    ws.__multi.forEachSelected(b => b.setDisabled(false));
+    Blockly.Events.setGroup(false);
+  }));
+  registry.register(mk('v3d-multi-clear', 'Clear Selection', () => { clearSelection(); }, 101));
+
+  // Small throttle util
+  function throttle(fn, ms){
+    let t=0;
+    return function(){
+      const now = performance.now();
+      if (now - t >= ms) { t = now; return fn.apply(this, arguments); }
+    };
+  }
+
+  console.log('%c[Multi-Select] Installed: Shift+drag = marquee, Ctrl/⌘-click = toggle, group move, bulk ops, copy/paste.',
+              'color: #1e88e5; font-weight:bold;');
+})();`;
+}
+</script>

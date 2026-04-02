@@ -1,0 +1,1532 @@
+<template color="#047857" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Shift+T: move selection to another tab — procedure defs use copy→relink→delete→rename. Requires ?logic; chain procedureRetargetLoader before this in Master.">
+    <dummy>
+        <label>Move blocks to tab</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `(function() {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has('logic')) {
+        return;
+    }
+    if (window.__adamMoveToTabV2Installed) {
+        return;
+    }
+    window.__adamMoveToTabV2Installed = true;
+
+    /*
+     * Window globals used by this block (and procedureRetargetLoader):
+     *   __adamMoveToTabV2Debug — set true for verbose step traces (traceMoveV2).
+     *   __adamMoveProcedureGetDefRestore / __adamMoveProcedureCutPhase — procedure bridge during cut/paste path.
+     *   __adamLogicTabRenderHookInstalled — one-time tab-click hook for Blockly svgResize/resizeContents.
+     *   __adamMoveToTabV2FullRenderOnTabClick — optional; if true, tab clicks also run full ws.render() (slow).
+     *   __adamMoveBlocksToTabV2, openMoveToTabV2UI — public entry points.
+     *   __adamEnsureProcedureRetargetApi / __adamProcedureRetargetApi — from procedureRetargetLoader (procedure path).
+     *   __adamPushSafeProcedureGetDefinition / __adamPopSafeProcedureGetDefinition — refcount wrapper from procedureRetargetLoader.
+     */
+
+    /** Step tracing and detailed pair-fail logs; enable with window.__adamMoveToTabV2Debug = true */
+    function traceMoveV2(phase, detail) {
+        if (!window.__adamMoveToTabV2Debug) return;
+        try {
+            if (detail !== undefined) {
+                console.log('[MoveToTabV2]', phase, detail);
+            } else {
+                console.log('[MoveToTabV2]', phase);
+            }
+        } catch (eT) { /* */ }
+    }
+
+    function adamGenMoveGroupId() {
+        if (Blockly.utils && Blockly.utils.idGenerator && typeof Blockly.utils.idGenerator.genUid === 'function') {
+            return Blockly.utils.idGenerator.genUid();
+        }
+        return 'adamMoveV2_' + Date.now() + '_' + Math.floor(Math.random() * 1e9);
+    }
+
+    var _adamTabListCache = { list: null, ts: 0 };
+    var ADAM_TAB_LIST_CACHE_MS = 400;
+
+    function invalidateAdamTabListCache() {
+        _adamTabListCache.list = null;
+        _adamTabListCache.ts = 0;
+    }
+
+    if (!window.__adamTabListCacheInvalidatorInstalled) {
+        window.__adamTabListCacheInvalidatorInstalled = true;
+        document.addEventListener('click', function(ev) {
+            var el = ev.target;
+            if (!el || typeof el.closest !== 'function') return;
+            if (el.closest('.title-bar__tab-header') || el.closest('.title-bar__tab-add')) {
+                invalidateAdamTabListCache();
+            }
+        }, true);
+    }
+
+    /** Calls generateXMLStr() — expensive on huge puzzles; cached briefly unless tab strip changed. */
+    function refreshTabsFromXml() {
+        var now = Date.now();
+        if (_adamTabListCache.list && now - _adamTabListCache.ts < ADAM_TAB_LIST_CACHE_MS) {
+            return _adamTabListCache.list;
+        }
+        var pe = typeof __PE__ !== 'undefined' ? __PE__ : null;
+        if (!pe || typeof pe.generateXMLStr !== 'function') {
+            return [];
+        }
+        try {
+            var xmlStr = pe.generateXMLStr();
+            var parser = new DOMParser();
+            var dom = parser.parseFromString(xmlStr, 'application/xml');
+            var tabEls = dom.querySelectorAll('tab');
+            var out = [];
+            for (var i = 0; i < tabEls.length; i++) {
+                var el = tabEls[i];
+                out.push({
+                    name: el.getAttribute('name') || 'Tab ' + i,
+                    tabIndex: i
+                });
+            }
+            _adamTabListCache.list = out;
+            _adamTabListCache.ts = now;
+            return out;
+        } catch (e) {
+            console.warn('[MoveToTabV2] Could not parse tabs:', e);
+            return [];
+        }
+    }
+
+    /* Blockly Names.equals can throw when procedure names are null during deletes; same class of noise as
+       procedureRetargetLoader's safe getDefinition — suppress matching console/onerror spam only. */
+    function shouldSuppressError(msg) {
+        if (!msg) return false;
+        var message = String(msg);
+        return (message.indexOf('toLowerCase') !== -1 || message.indexOf('Names.equals') !== -1) &&
+            message.indexOf('null') !== -1;
+    }
+
+    function collectBlockIdsFromDom(node, idSet) {
+        if (!node) return;
+        if (node.tagName && String(node.tagName).toLowerCase() === 'block') {
+            var bid = node.getAttribute('id');
+            if (bid) idSet[bid] = true;
+        }
+        var ch = node.children;
+        if (ch) {
+            for (var i = 0; i < ch.length; i++) {
+                collectBlockIdsFromDom(ch[i], idSet);
+            }
+        }
+    }
+
+    function removeConflictingProxies(ws, idSet) {
+        if (typeof BlocklyExt === 'undefined' || !BlocklyExt.Procedures ||
+            typeof BlocklyExt.Procedures.wsRemoveProxyBlock !== 'function') {
+            return;
+        }
+        var tops = ws.getTopBlocks(false);
+        var toRemove = [];
+        for (var i = 0; i < tops.length; i++) {
+            var b = tops[i];
+            if (b && b.isProxyProcDefBlock_ && idSet[b.id]) {
+                toRemove.push(b);
+            }
+        }
+        for (var j = 0; j < toRemove.length; j++) {
+            try {
+                BlocklyExt.Procedures.wsRemoveProxyBlock(ws, toRemove[j]);
+            } catch (e) { /* ignore */ }
+        }
+    }
+
+    function appendDomToWorkspaceSafe(xmlWrap, destWs) {
+        var Proc = Blockly.Procedures;
+        var orig = Proc && typeof Proc.isNameUsed === 'function' ? Proc.isNameUsed : null;
+        var created;
+        if (!orig) {
+            created = Blockly.Xml.appendDomToWorkspace(xmlWrap, destWs);
+            return created || [];
+        }
+        Proc.isNameUsed = function(name, workspace, exclude) {
+            if (name == null || name === '') return false;
+            var nameStr = typeof name === 'string' ? name : String(name);
+            var blocks = workspace.getAllBlocks(false);
+            for (var i = 0; i < blocks.length; i++) {
+                var block = blocks[i];
+                if (block === exclude) continue;
+                if (!block.getProcedureDef) continue;
+                var def;
+                try {
+                    def = block.getProcedureDef();
+                } catch (e0) {
+                    continue;
+                }
+                if (!def || def[0] == null || def[0] === '') continue;
+                var d0 = def[0];
+                if (typeof d0 !== 'string' && typeof d0 !== 'number') continue;
+                try {
+                    if (Blockly.Names.equals(String(d0), nameStr)) return true;
+                } catch (e1) {
+                    continue;
+                }
+            }
+            return false;
+        };
+        try {
+            created = Blockly.Xml.appendDomToWorkspace(xmlWrap, destWs);
+        } finally {
+            Proc.isNameUsed = orig;
+        }
+        return created || [];
+    }
+
+    function getMovedProcedureNames(roots) {
+        var map = {};
+        for (var i = 0; i < roots.length; i++) {
+            var b = roots[i];
+            if (!b) continue;
+            if (b.type === 'procedures_defnoreturn' || b.type === 'procedures_defreturn') {
+                var d = b.getProcedureDef && b.getProcedureDef();
+                if (d && d[0]) map[d[0]] = true;
+            }
+        }
+        return map;
+    }
+
+    var __adamMoveProcedureDefPlaceholder = { __adamMoveProcedureDefPlaceholder: true };
+
+    function hasAnyMovedProcedureName(namesObj) {
+        for (var k in namesObj) {
+            if (namesObj.hasOwnProperty(k)) return true;
+        }
+        return false;
+    }
+
+    function createGetDefinitionMoveBridge(movedProcNames, origGetDefinition) {
+        return function(name, workspace) {
+            var def = origGetDefinition.call(Blockly.Procedures, name, workspace);
+            if (def) return def;
+            if (!name || !movedProcNames[name]) return null;
+            var list = typeof Blockly.Workspace.getAll === 'function' ? Blockly.Workspace.getAll() : [];
+            for (var i = 0; i < list.length; i++) {
+                var w = list[i];
+                if (!w || w === workspace) continue;
+                try {
+                    if (w.isFlyout || w.isMutator) continue;
+                } catch (e0) { /* */ }
+                try {
+                    def = origGetDefinition.call(Blockly.Procedures, name, w);
+                    if (def) return def;
+                } catch (e1) { /* */ }
+            }
+            if (window.__adamMoveProcedureCutPhase) return __adamMoveProcedureDefPlaceholder;
+            return null;
+        };
+    }
+
+    function beginMoveProcedureBridge(movedProcNames) {
+        window.__adamMoveProcedureGetDefRestore = null;
+        if (!hasAnyMovedProcedureName(movedProcNames)) return;
+        if (!Blockly.Procedures || typeof Blockly.Procedures.getDefinition !== 'function') return;
+        var orig = Blockly.Procedures.getDefinition;
+        window.__adamMoveProcedureGetDefRestore = orig;
+        Blockly.Procedures.getDefinition = createGetDefinitionMoveBridge(movedProcNames, orig);
+    }
+
+    function endMoveProcedureBridge() {
+        window.__adamMoveProcedureCutPhase = false;
+        var rest = window.__adamMoveProcedureGetDefRestore;
+        window.__adamMoveProcedureGetDefRestore = null;
+        if (rest && Blockly.Procedures) {
+            Blockly.Procedures.getDefinition = rest;
+        }
+    }
+
+    function countCallersByName(workspace, procName) {
+        var c = 0;
+        if (!workspace || typeof workspace.getAllBlocks !== 'function') return 0;
+        var blocks = workspace.getAllBlocks(false);
+        for (var i = 0; i < blocks.length; i++) {
+            var b = blocks[i];
+            if (!b || b.disposed) continue;
+            if (typeof b.getProcedureCall !== 'function') continue;
+            try {
+                if (b.getProcedureCall() === procName) c++;
+            } catch (e) { /* */ }
+        }
+        return c;
+    }
+
+    function buildCallerBackupForMovedProcedures(ws, roots, excludeRootIds) {
+        var procNames = getMovedProcedureNames(roots);
+        var name;
+        var hasNames = false;
+        for (name in procNames) {
+            if (procNames.hasOwnProperty(name)) { hasNames = true; break; }
+        }
+        if (!hasNames) {
+            return { procNames: procNames, countsBefore: {}, items: [] };
+        }
+        var exclude = {};
+        for (var x = 0; x < excludeRootIds.length; x++) exclude[excludeRootIds[x]] = true;
+        var countsBefore = {};
+        for (name in procNames) {
+            if (procNames.hasOwnProperty(name)) countsBefore[name] = countCallersByName(ws, name);
+        }
+        var items = [];
+        var seenRootIds = {};
+        var blocks = ws.getAllBlocks(false);
+        for (var bi = 0; bi < blocks.length; bi++) {
+            var bk = blocks[bi];
+            if (!bk || bk.disposed) continue;
+            if (typeof bk.getProcedureCall !== 'function') continue;
+            var pname;
+            try {
+                pname = bk.getProcedureCall();
+            } catch (e1) {
+                continue;
+            }
+            if (!procNames[pname]) continue;
+            var root = bk;
+            while (root.getParent && root.getParent()) root = root.getParent();
+            if (exclude[root.id]) continue;
+            if (seenRootIds[root.id]) continue;
+            seenRootIds[root.id] = true;
+            try {
+                var dom = Blockly.Xml.blockToDomWithXY(root);
+                if (dom) items.push({ rootId: root.id, procName: pname, dom: dom });
+            } catch (e2) { /* */ }
+        }
+        return { procNames: procNames, countsBefore: countsBefore, items: items };
+    }
+
+    function blockLooksMissing(block) {
+        if (!block) return true;
+        if (block.disposed) return true;
+        try {
+            if (block.rendered && typeof block.getSvgRoot === 'function') {
+                var root = block.getSvgRoot();
+                if (!root) return true;
+            }
+        } catch (e) {
+            return true;
+        }
+        return false;
+    }
+
+    function waitForProcedureDefsAfterSync(ws, callerBackup) {
+        var names = [];
+        for (var n in callerBackup.countsBefore) {
+            if (callerBackup.countsBefore.hasOwnProperty(n) && callerBackup.countsBefore[n] > 0) {
+                names.push(n);
+            }
+        }
+        if (!names.length || !Blockly.Procedures || typeof Blockly.Procedures.getDefinition !== 'function') {
+            return Promise.resolve();
+        }
+        return new Promise(function(resolve) {
+            var frames = 0;
+            var maxFrames = 24;
+            function tick() {
+                var ok = true;
+                for (var i = 0; i < names.length; i++) {
+                    if (!Blockly.Procedures.getDefinition(names[i], ws)) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok || frames >= maxFrames) {
+                    return resolve();
+                }
+                frames++;
+                requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        });
+    }
+
+    function maybeRestoreCallersAfterPaste(callerBackup, sourceTabIndex) {
+        if (!callerBackup || !callerBackup.items.length || sourceTabIndex < 0) {
+            return Promise.resolve();
+        }
+        if (sourceTabIndex >= 0) clickTabByIndexIfNeeded(sourceTabIndex);
+        var sw = Blockly.getMainWorkspace();
+        if (!sw) return Promise.resolve();
+
+        return Promise.resolve()
+            .then(function() {
+                return waitForProcedureDefsAfterSync(sw, callerBackup);
+            })
+            .then(function() {
+                var itemStates = [];
+                var need = false;
+                var j;
+                for (j = 0; j < callerBackup.items.length; j++) {
+                    var it0 = callerBackup.items[j];
+                    var b0 = sw.getBlockById(it0.rootId);
+                    var miss = blockLooksMissing(b0);
+                    itemStates.push({
+                        rootId: it0.rootId,
+                        procName: it0.procName,
+                        looksMissing: miss
+                    });
+                    if (miss) need = true;
+                }
+                var countsAfter = {};
+                for (var n in callerBackup.countsBefore) {
+                    if (!callerBackup.countsBefore.hasOwnProperty(n)) continue;
+                    var before = callerBackup.countsBefore[n];
+                    var after = countCallersByName(sw, n);
+                    countsAfter[n] = after;
+                    if (before > 0 && after < before) need = true;
+                }
+                if (!need) return;
+                for (j = 0; j < callerBackup.items.length; j++) {
+                    var it = callerBackup.items[j];
+                    var b = sw.getBlockById(it.rootId);
+                    if (blockLooksMissing(b)) {
+                        if (b && !b.disposed) {
+                            try {
+                                b.dispose(false);
+                            } catch (eD) { /* */ }
+                        }
+                        var wx = document.createElement('xml');
+                        wx.appendChild(it.dom.cloneNode(true));
+                        appendDomToWorkspaceSafe(wx, sw);
+                    }
+                }
+                if (typeof uiActions !== 'undefined' && uiActions.TaskBar && typeof uiActions.TaskBar.setHasUnsavedChanges === 'function') {
+                    uiActions.TaskBar.setHasUnsavedChanges(true);
+                }
+            });
+    }
+
+    function getMovableSelection(ws) {
+        var multi = window.__multiSelectedBlocks || [];
+        var selectedBlocks = [];
+        if (multi.length > 0) {
+            for (var i = 0; i < multi.length; i++) {
+                var b = multi[i];
+                if (b && b.workspace === ws && !b.disposed) {
+                    selectedBlocks.push(b);
+                }
+            }
+        } else {
+            var one = Blockly.common.getSelected && Blockly.common.getSelected();
+            if (one && one.workspace === ws && !one.disposed) {
+                selectedBlocks.push(one);
+            }
+        }
+        return selectedBlocks.filter(function(b) {
+            return b && (!b.isMovable || b.isMovable());
+        });
+    }
+
+    function filterBlocksNotUnderSelectedAncestor(blocks) {
+        var set = {};
+        for (var i = 0; i < blocks.length; i++) {
+            if (blocks[i]) set[blocks[i].id] = true;
+        }
+        return blocks.filter(function(b) {
+            if (!b || b.disposed) return false;
+            var p = b.getParent && b.getParent();
+            while (p) {
+                if (set[p.id]) return false;
+                p = p.getParent && p.getParent();
+            }
+            return true;
+        });
+    }
+
+    /** Walk up the statement stack (getPreviousBlock) so one selected block in a chain moves the whole stack. */
+    function statementStackHead(block) {
+        var b = block;
+        if (!b || b.disposed) return null;
+        try {
+            while (b && typeof b.getPreviousBlock === 'function') {
+                var prev = b.getPreviousBlock();
+                if (!prev) break;
+                b = prev;
+            }
+        } catch (eWalk) {
+            return block;
+        }
+        return b;
+    }
+
+    function getRootsToMove(ws) {
+        var movable = getMovableSelection(ws);
+        if (movable.length === 0) return [];
+        var headSeen = {};
+        var heads = [];
+        for (var i = 0; i < movable.length; i++) {
+            var m = movable[i];
+            if (!m || m.disposed) continue;
+            var top = statementStackHead(m);
+            if (!top || top.disposed) continue;
+            if (!headSeen[top.id]) {
+                headSeen[top.id] = true;
+                heads.push(top);
+            }
+        }
+        return filterBlocksNotUnderSelectedAncestor(heads);
+    }
+
+    function detachRootsForMove(roots) {
+        for (var i = 0; i < roots.length; i++) {
+            var b = roots[i];
+            if (!b || b.disposed || b.workspace && b.workspace.isFlyout) continue;
+            try {
+                if (typeof b.unplug === 'function') {
+                    /* false = do not heal stack: unplug(true) reconnects the block below this root to the
+                       previous parent, so only the top block would be serialized/moved; we need the full
+                       statement chain (e.g. stacked comments) under each root. */
+                    b.unplug(false);
+                }
+            } catch (e) {
+                console.warn('[MoveToTabV2] Could not detach block from parent chain:', e);
+            }
+        }
+    }
+
+    /** groupId optional: pass Blockly event group id; omit for anonymous group (true). */
+    function deleteBlocksWithSuppression(blocks, groupId) {
+        var originalConsoleError = console.error;
+        var originalWindowError = window.onerror;
+        console.error = function() {
+            var full = [].join.call(arguments, ' ');
+            if (shouldSuppressError(full)) return;
+            originalConsoleError.apply(console, arguments);
+        };
+        window.onerror = function(message, source, lineno, colno, error) {
+            if (shouldSuppressError(message)) return true;
+            if (originalWindowError) {
+                return originalWindowError.call(window, message, source, lineno, colno, error);
+            }
+            return false;
+        };
+        var wasGrouped = Blockly.Events.getGroup();
+        var eventsWereEnabled = Blockly.Events.isEnabled();
+        if (groupId !== undefined && groupId !== null) {
+            Blockly.Events.setGroup(groupId);
+        } else {
+            Blockly.Events.setGroup(true);
+        }
+        if (!eventsWereEnabled) Blockly.Events.enable();
+        try {
+            for (var i = 0; i < blocks.length; i++) {
+                var block = blocks[i];
+                if (block && block.workspace && !block.disposed && block.isDeletable && block.isDeletable()) {
+                    try {
+                        /* dispose(false, true): healStack false deletes the whole statement chain with the
+                           root; true would reconnect the tail to the parent (Blockly checkAndDelete).
+                           Required after detachRootsForMove(unplug false) so we do not leave duplicates. */
+                        if (typeof block.dispose === 'function') {
+                            block.dispose(false, true);
+                        }
+                    } catch (err) {
+                        var errMsg = String((err && err.message) || err || '');
+                        if (!shouldSuppressError(errMsg)) {
+                            console.warn('[MoveToTabV2] Delete error:', err);
+                        }
+                    }
+                }
+            }
+        } finally {
+            Blockly.Events.setGroup(wasGrouped);
+            if (!eventsWereEnabled) Blockly.Events.disable();
+            console.error = originalConsoleError;
+            window.onerror = originalWindowError;
+        }
+    }
+
+    function getActiveTabHeaderIndex() {
+        var headers = document.querySelectorAll('.title-bar__tab-header');
+        for (var h = 0; h < headers.length; h++) {
+            if (headers[h].classList.contains('title-bar__tab-header--active')) return h;
+        }
+        return -1;
+    }
+
+    function clickTabByIndex(tabIndex) {
+        var headers = document.querySelectorAll('.title-bar__tab-header');
+        if (headers[tabIndex]) {
+            headers[tabIndex].click();
+            return true;
+        }
+        return false;
+    }
+
+    /** Avoid redundant tab clicks when the target header is already active (less flicker / work). */
+    function clickTabByIndexIfNeeded(tabIndex) {
+        if (tabIndex < 0) return false;
+        if (getActiveTabHeaderIndex() === tabIndex) return true;
+        return clickTabByIndex(tabIndex);
+    }
+
+    function createTabWithName(name) {
+        return new Promise(function(resolve, reject) {
+            var addBtn = document.querySelector('.title-bar__tab-add');
+            if (!addBtn) {
+                reject(new Error('New tab button not found'));
+                return;
+            }
+            var headersBefore = document.querySelectorAll('.title-bar__tab-header').length;
+            addBtn.click();
+
+            var attempts = 0;
+            var forcedEditMode = false;
+
+            function getActiveHeader() {
+                return document.querySelector('.title-bar__tab-header--active') || null;
+            }
+
+            function findRenameInput() {
+                var activeHeader = getActiveHeader();
+                if (activeHeader) {
+                    var activeInput = activeHeader.querySelector('input.title-bar__tab-input') ||
+                        activeHeader.querySelector('input[type="text"]') ||
+                        activeHeader.querySelector('input');
+                    if (activeInput) return activeInput;
+                }
+                return document.querySelector('input.title-bar__tab-input') ||
+                    document.querySelector('.title-bar__tab-headers-inner input[type="text"]') ||
+                    null;
+            }
+
+            function commitRename(input) {
+                try { input.focus(); } catch (e0) { /* */ }
+                input.value = name;
+                try {
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                } catch (e1) { /* */ }
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'Enter',
+                    code: 'Enter',
+                    keyCode: 13,
+                    which: 13,
+                    bubbles: true,
+                    cancelable: true
+                }));
+                setTimeout(resolve, 120);
+            }
+
+            function tryRename() {
+                attempts++;
+
+                var headersNow = document.querySelectorAll('.title-bar__tab-header').length;
+                var input = findRenameInput();
+                if (input) {
+                    commitRename(input);
+                    return;
+                }
+
+                if (!forcedEditMode && headersNow >= headersBefore) {
+                    var activeHeader = getActiveHeader();
+                    if (activeHeader) {
+                        forcedEditMode = true;
+                        try {
+                            activeHeader.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+                        } catch (e2) { /* */ }
+                    }
+                }
+
+                if (attempts < 80) {
+                    setTimeout(tryRename, 50);
+                } else {
+                    reject(new Error('Tab rename field did not appear'));
+                }
+            }
+            setTimeout(tryRename, 60);
+        });
+    }
+
+    function switchToTabNamed(destName) {
+        var tabs = refreshTabsFromXml();
+        for (var i = 0; i < tabs.length; i++) {
+            if (tabs[i].name === destName) {
+                if (clickTabByIndexIfNeeded(tabs[i].tabIndex)) {
+                    return Promise.resolve();
+                }
+                return Promise.reject(new Error('Tab header not found for: ' + destName));
+            }
+        }
+        return Promise.reject(new Error('Tab not found: ' + destName));
+    }
+
+    /**
+     * After DOM tab click, Verge3D may swap Blockly main workspace on the next frame.
+     */
+    function waitForMainWorkspaceStable(maxMs) {
+        maxMs = maxMs || 2500;
+        var start = Date.now();
+        return new Promise(function(resolve) {
+            function tick() {
+                var ws = Blockly.getMainWorkspace();
+                if (ws && typeof ws.getAllBlocks === 'function') {
+                    requestAnimationFrame(function() {
+                        requestAnimationFrame(function() {
+                            resolve(ws);
+                        });
+                    });
+                    return;
+                }
+                if (Date.now() - start > maxMs) {
+                    resolve(Blockly.getMainWorkspace());
+                    return;
+                }
+                setTimeout(tick, 16);
+            }
+            tick();
+        });
+    }
+
+    /**
+     * Tab switch: resize the Blockly SVG and scroll metrics to the visible tab. We intentionally do
+     * NOT call ws.render() here — a full workspace render relayouts every block (huge procedure
+     * defs “gape” empty for seconds). Verge3D/Blockly already update the canvas when the tab shows;
+     * svgResize + resizeContents fix dimensions without redrawing all block SVG.
+     * If something misaligns, set window.__adamMoveToTabV2FullRenderOnTabClick = true (expensive).
+     */
+    function installMainWorkspaceRenderOnLogicTabChange() {
+        if (window.__adamLogicTabRenderHookInstalled) return;
+        window.__adamLogicTabRenderHookInstalled = true;
+        document.addEventListener('click', function(e) {
+            var el = e.target;
+            if (!el || typeof el.closest !== 'function') return;
+            if (!el.closest('.title-bar__tab-header')) return;
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    var ws = Blockly.getMainWorkspace();
+                    if (!ws) return;
+                    try {
+                        if (Blockly.common && typeof Blockly.common.svgResize === 'function') {
+                            Blockly.common.svgResize(ws);
+                        }
+                        if (typeof ws.resizeContents === 'function') {
+                            ws.resizeContents();
+                        }
+                        if (window.__adamMoveToTabV2FullRenderOnTabClick && typeof ws.render === 'function') {
+                            ws.render();
+                        }
+                    } catch (eR) { /* */ }
+                });
+            });
+        }, false);
+    }
+
+    installMainWorkspaceRenderOnLogicTabChange();
+
+    function buildRetargetPairsRobust(roots, createdIds, destWs, procPlan) {
+        var pairList = [];
+        for (var pi = 0; pi < procPlan.length; pi++) {
+            var pp = procPlan[pi];
+            var idx = pp.rootIndex;
+            if (idx >= createdIds.length) {
+                traceMoveV2('pair fail: rootIndex past createdIds', { idx: idx, createdIdsLen: createdIds.length });
+                return null;
+            }
+            var srcRoot = roots[idx];
+            if (!srcRoot) {
+                traceMoveV2('pair fail: no root at index', idx);
+                return null;
+            }
+            var id = createdIds[idx];
+            var newTop = destWs.getBlockById(id);
+            if (!newTop) {
+                traceMoveV2('pair fail: missing block', id);
+                return null;
+            }
+            if (newTop.type !== srcRoot.type) {
+                traceMoveV2('pair fail: type mismatch', { newType: newTop.type, srcType: srcRoot.type });
+                return null;
+            }
+            if (pp.oldName == null || String(pp.oldName).trim() === '') {
+                traceMoveV2('pair fail: empty oldName');
+                return null;
+            }
+            var dn = newTop.getProcedureDef && newTop.getProcedureDef();
+            var newName = dn && dn[0] != null && dn[0] !== '' ? dn[0] : null;
+            if (!newName && newTop.getFieldValue) {
+                try {
+                    var fv = newTop.getFieldValue('NAME');
+                    if (fv != null && String(fv).trim() !== '') newName = fv;
+                } catch (eFv) { /* */ }
+            }
+            if (newName == null || String(newName).trim() === '') {
+                traceMoveV2('pair fail: no new procedure name');
+                return null;
+            }
+            pairList.push({
+                oldName: String(pp.oldName),
+                newName: String(newName),
+                defId: newTop.id,
+                defType: pp.defType
+            });
+        }
+        return pairList;
+    }
+
+    function rollbackPastedTopLevel(destWs, createdIds) {
+        if (!destWs || !createdIds || !createdIds.length) return;
+        var blocks = [];
+        for (var i = 0; i < createdIds.length; i++) {
+            var b = destWs.getBlockById(createdIds[i]);
+            if (b && !b.disposed) blocks.push(b);
+        }
+        deleteBlocksWithSuppression(blocks);
+    }
+
+    function callerHintFromDefType(defType) {
+        return defType === 'procedures_defreturn' ? 'procedures_callreturn' : 'procedures_callnoreturn';
+    }
+
+    function adamGetPastedRootBlocks(ws, createdIds) {
+        var out = [];
+        if (!ws || !createdIds) return out;
+        for (var i = 0; i < createdIds.length; i++) {
+            var b = ws.getBlockById(createdIds[i]);
+            if (b && !b.disposed) out.push(b);
+        }
+        return out;
+    }
+
+    function adamBBoxOfRootBlocks(blocks) {
+        var minL = Infinity;
+        var minT = Infinity;
+        var maxR = -Infinity;
+        var maxB = -Infinity;
+        for (var i = 0; i < blocks.length; i++) {
+            var b = blocks[i];
+            if (!b || b.disposed) continue;
+            var r = typeof b.getBoundingRectangle === 'function' ? b.getBoundingRectangle() : null;
+            if (r && typeof r.left === 'number') {
+                minL = Math.min(minL, r.left);
+                minT = Math.min(minT, r.top);
+                maxR = Math.max(maxR, r.right);
+                maxB = Math.max(maxB, r.bottom);
+            }
+        }
+        if (minL === Infinity) return null;
+        return {
+            left: minL,
+            top: minT,
+            right: maxR,
+            bottom: maxB,
+            cx: (minL + maxR) / 2,
+            cy: (minT + maxB) / 2
+        };
+    }
+
+    /** Draw only pasted blocks (and their descendants), not the entire workspace — O(moved) vs O(all blocks). */
+    function adamRenderPastedRootsOnly(rootBlocks) {
+        if (!rootBlocks || !rootBlocks.length) return;
+        for (var ri = 0; ri < rootBlocks.length; ri++) {
+            var root = rootBlocks[ri];
+            if (!root || root.disposed) continue;
+            var toDraw;
+            if (typeof root.getDescendants === 'function') {
+                try {
+                    toDraw = root.getDescendants();
+                } catch (eD) {
+                    toDraw = null;
+                }
+            } else {
+                toDraw = null;
+            }
+            if (!toDraw || !toDraw.length) toDraw = [root];
+            for (var dj = 0; dj < toDraw.length; dj++) {
+                var blk = toDraw[dj];
+                if (!blk || blk.disposed) continue;
+                try {
+                    if (typeof blk.render === 'function') blk.render();
+                } catch (eR) { /* */ }
+            }
+        }
+    }
+
+    /**
+     * Existing tab: center pasted roots in the current viewport (saved scroll position).
+     * New tab: align group bbox top-left near workspace origin (margin 20).
+     */
+    function adamApplyPlacementToPastedRoots(ws, createdIds, destTabExistedAtStart, eventGroupId) {
+        if (!ws || !createdIds || !createdIds.length) return;
+        var roots = adamGetPastedRootBlocks(ws, createdIds);
+        if (!roots.length) return;
+        adamRenderPastedRootsOnly(roots);
+        var bbox = adamBBoxOfRootBlocks(roots);
+        if (!bbox) return;
+
+        var prevG = Blockly.Events.getGroup();
+        if (eventGroupId != null && eventGroupId !== false) {
+            Blockly.Events.setGroup(eventGroupId);
+        } else {
+            Blockly.Events.setGroup(true);
+        }
+        try {
+            var dx;
+            var dy;
+            if (destTabExistedAtStart) {
+                var m = typeof ws.getMetrics === 'function' ? ws.getMetrics() : null;
+                if (!m) return;
+                var vl = typeof m.viewLeft === 'number' ? m.viewLeft : 0;
+                var vt = typeof m.viewTop === 'number' ? m.viewTop : 0;
+                var vw = typeof m.viewWidth === 'number' ? m.viewWidth : 0;
+                var vh = typeof m.viewHeight === 'number' ? m.viewHeight : 0;
+                if (vw <= 0 || vh <= 0) return;
+                var vx = vl + vw / 2;
+                var vy = vt + vh / 2;
+                dx = vx - bbox.cx;
+                dy = vy - bbox.cy;
+            } else {
+                var margin = 20;
+                dx = margin - bbox.left;
+                dy = margin - bbox.top;
+            }
+            for (var j = 0; j < roots.length; j++) {
+                if (roots[j] && typeof roots[j].moveBy === 'function') {
+                    roots[j].moveBy(dx, dy);
+                }
+            }
+        } finally {
+            Blockly.Events.setGroup(prevG);
+        }
+    }
+
+    function adamSelectPastedRoots(destWs, createdIds) {
+        var roots = adamGetPastedRootBlocks(destWs, createdIds);
+        if (!roots.length) return;
+        if (window.__multiSelectedBlocks && window.__multiSelectedBlocks.length) {
+            window.__multiSelectedBlocks.forEach(function(b) {
+                if (b && b.removeSelect) b.removeSelect();
+            });
+        }
+        window.__multiSelectedBlocks = [];
+        if (roots.length === 1) {
+            try {
+                Blockly.common.setSelected(roots[0]);
+            } catch (e0) { /* */ }
+            if (typeof roots[0].addSelect === 'function') roots[0].addSelect();
+            return;
+        }
+        for (var i = 0; i < roots.length; i++) {
+            if (typeof roots[i].addSelect === 'function') roots[i].addSelect();
+            window.__multiSelectedBlocks.push(roots[i]);
+        }
+        try {
+            Blockly.common.setSelected(roots[roots.length - 1]);
+        } catch (e1) { /* */ }
+    }
+
+    function adamMoveProcedureFourStepV2(destName, options, roots, rootIds, sourceTabIndex, xmlWrap, idSet) {
+        if (typeof window.__adamEnsureProcedureRetargetApi !== 'function') {
+            traceMoveV2('4step:abort', 'Missing __adamEnsureProcedureRetargetApi (chain procedureRetargetLoader before moveToTabV2)');
+            console.error('[MoveToTabV2] Missing Procedure retarget API. Chain procedureRetargetLoader before this block.');
+            return Promise.resolve(false);
+        }
+        window.__adamEnsureProcedureRetargetApi();
+        var api = window.__adamProcedureRetargetApi;
+
+        var procPlan = [];
+        for (var ri = 0; ri < roots.length; ri++) {
+            var rb = roots[ri];
+            if (!rb || rb.disposed || rb.isProxyProcDefBlock_) continue;
+            if (rb.type !== 'procedures_defnoreturn' && rb.type !== 'procedures_defreturn') continue;
+            var d0 = rb.getProcedureDef && rb.getProcedureDef();
+            var oldNm = d0 && d0[0] != null && d0[0] !== '' ? d0[0] : null;
+            if (!oldNm && rb.getFieldValue) {
+                try {
+                    var fvs = rb.getFieldValue('NAME');
+                    if (fvs != null && String(fvs).trim() !== '') oldNm = fvs;
+                } catch (eOn) { /* */ }
+            }
+            if (oldNm == null || String(oldNm).trim() === '') continue;
+            procPlan.push({ rootIndex: ri, oldName: String(oldNm), defType: rb.type });
+        }
+        if (procPlan.length === 0) {
+            traceMoveV2('4step:abort', 'procPlan empty after scanning roots');
+            return Promise.resolve(false);
+        }
+
+        traceMoveV2('4step:start', {
+            destName: destName,
+            sourceTabIndex: sourceTabIndex,
+            rootIds: rootIds,
+            procPlan: procPlan.map(function(p) {
+                return { rootIndex: p.rootIndex, oldName: p.oldName, defType: p.defType };
+            })
+        });
+
+        var moveG = adamGenMoveGroupId();
+        traceMoveV2('4step:eventGroup', { moveGroupId: moveG });
+        var prevG = Blockly.Events.getGroup();
+
+        function restoreGroup() {
+            try {
+                Blockly.Events.setGroup(prevG);
+            } catch (eG) { /* */ }
+        }
+
+        function setMoveG() {
+            Blockly.Events.setGroup(moveG);
+        }
+
+        var ctxSnapshot = { pairList: null, destName: destName, createdIds: null, destWs: null };
+
+        return Promise.resolve()
+            .then(function() {
+                if (window.__adamPushSafeProcedureGetDefinition) window.__adamPushSafeProcedureGetDefinition();
+                traceMoveV2('4step:1-ensure-dest-tab', { destName: destName, createIfMissing: !!options.createIfMissing });
+                var existing = refreshTabsFromXml().some(function(t) { return t.name === destName; });
+                if (existing) return switchToTabNamed(destName);
+                if (options.createIfMissing) return createTabWithName(destName);
+                return Promise.reject(new Error('Tab does not exist'));
+            })
+            .then(function() { return waitForMainWorkspaceStable(); })
+            .then(function() {
+                traceMoveV2('4step:2-dest-workspace-ready');
+                var destWs = Blockly.getMainWorkspace();
+                if (!destWs) throw new Error('No workspace on destination tab');
+                traceMoveV2('4step:2-workspace', { workspaceId: destWs.id });
+                ctxSnapshot.destWs = destWs;
+                setMoveG();
+                removeConflictingProxies(destWs, idSet);
+                traceMoveV2('4step:3-appendDom-start', { xmlChildCount: xmlWrap.children ? xmlWrap.children.length : 0 });
+                var createdIds;
+                try {
+                    createdIds = appendDomToWorkspaceSafe(xmlWrap, destWs);
+                } catch (pasteErr) {
+                    traceMoveV2('4step:3-appendDom-FAILED', String(pasteErr && pasteErr.message || pasteErr));
+                    restoreGroup();
+                    throw pasteErr;
+                }
+                if (!createdIds || createdIds.length === 0) {
+                    createdIds = [];
+                    var ch = xmlWrap.children;
+                    for (var cj = 0; cj < ch.length; cj++) {
+                        var cid = ch[cj].getAttribute && ch[cj].getAttribute('id');
+                        if (cid && destWs.getBlockById(cid)) createdIds.push(cid);
+                    }
+                }
+                ctxSnapshot.createdIds = createdIds;
+                traceMoveV2('4step:3-paste-done', { createdIds: createdIds });
+
+                traceMoveV2('4step:4-placement', { existingTabViewportCenter: options._adamDestTabExistedAtStart === true });
+                adamApplyPlacementToPastedRoots(destWs, createdIds, options._adamDestTabExistedAtStart === true, moveG);
+
+                var pairList = buildRetargetPairsRobust(roots, createdIds, destWs, procPlan);
+                if (!pairList || pairList.length !== procPlan.length) {
+                    traceMoveV2('4step:5-pairing-FAILED', { procPlanLen: procPlan.length, pairListLen: pairList ? pairList.length : 0 });
+                    rollbackPastedTopLevel(destWs, createdIds);
+                    restoreGroup();
+                    throw new Error('MoveToTabV2: could not match pasted procedure definitions to source roots.');
+                }
+                traceMoveV2('4step:5-pairs-ok', {
+                    pairs: pairList.map(function(p) {
+                        return { oldName: p.oldName, newName: p.newName, defId: p.defId };
+                    })
+                });
+
+                /* validateRetarget() from the context-menu API requires newName on every tab that
+                   still has callers of oldName — false negative right after duplicate-paste (new def
+                   exists only on dest). Match manual retarget: type-check only, then applyRetarget. */
+                var pi;
+                traceMoveV2('4step:6-typecheck-start', { count: pairList.length });
+                for (pi = 0; pi < pairList.length; pi++) {
+                    var p0 = pairList[pi];
+                    var hint0 = callerHintFromDefType(p0.defType);
+                    var defB0 = destWs.getBlockById(p0.defId);
+                    if (!defB0 || !api.callerTypeMatchesDef(hint0, defB0)) {
+                        traceMoveV2('4step:6-typecheck-FAILED', { index: pi, defId: p0.defId, hint: hint0 });
+                        rollbackPastedTopLevel(destWs, createdIds);
+                        restoreGroup();
+                        throw new Error('MoveToTabV2: procedure return type does not match callers.');
+                    }
+                }
+                traceMoveV2('4step:6-typecheck-ok');
+
+                for (pi = 0; pi < pairList.length; pi++) {
+                    var pr = pairList[pi];
+                    var oNm = pr.oldName;
+                    var nNm = pr.newName;
+                    if (oNm == null || nNm == null || String(oNm).trim() === '' || String(nNm).trim() === '') {
+                        traceMoveV2('4step:7-relink-invalid-name', { index: pi, oNm: oNm, nNm: nNm });
+                        rollbackPastedTopLevel(destWs, createdIds);
+                        restoreGroup();
+                        throw new Error('MoveToTabV2: invalid procedure name pair for relink.');
+                    }
+                    traceMoveV2('4step:7-relink', { index: pi, oldName: oNm, newName: nNm });
+                    setMoveG();
+                    try {
+                        api.applyRetarget(oNm, nNm);
+                        traceMoveV2('4step:7-relink-done', { index: pi });
+                    } catch (eRel) {
+                        traceMoveV2('4step:7-relink-THREW', { index: pi, err: String(eRel && eRel.message || eRel) });
+                        throw eRel;
+                    }
+                }
+
+                traceMoveV2('4step:8-switch-source-tab', { sourceTabIndex: sourceTabIndex });
+                if (sourceTabIndex >= 0) clickTabByIndexIfNeeded(sourceTabIndex);
+                return waitForMainWorkspaceStable().then(function() {
+                    traceMoveV2('4step:9-delete-source-roots', { rootIds: rootIds });
+                    var srcWs = Blockly.getMainWorkspace();
+                    if (srcWs) {
+                        var toDel = rootIds.map(function(id) { return srcWs.getBlockById(id); }).filter(function(b) { return b && b.workspace === srcWs && !b.disposed; });
+                        deleteBlocksWithSuppression(toDel, moveG);
+                    }
+                    traceMoveV2('4step:9-delete-done');
+                    ctxSnapshot.pairList = pairList;
+                    return ctxSnapshot;
+                });
+            })
+            .then(function(ctx) {
+                traceMoveV2('4step:10-switch-dest-for-rename', { destName: ctx.destName });
+                return switchToTabNamed(ctx.destName)
+                    .then(function() { return waitForMainWorkspaceStable(); })
+                    .then(function() { return ctx; });
+            })
+            .then(function(ctx) {
+                var destWs2 = Blockly.getMainWorkspace();
+                var api2 = window.__adamProcedureRetargetApi;
+                if (!destWs2 || !ctx.pairList) {
+                    traceMoveV2('4step:11-rename-skip', { reason: 'no workspace or pairList' });
+                    restoreGroup();
+                    return ctx;
+                }
+                traceMoveV2('4step:11-rename-definitions', { count: ctx.pairList.length });
+                for (var zi = 0; zi < ctx.pairList.length; zi++) {
+                    var pz = ctx.pairList[zi];
+                    var defB = destWs2.getBlockById(pz.defId);
+                    if (!defB || defB.disposed) {
+                        traceMoveV2('4step:11-rename-skip-block', { defId: pz.defId });
+                        continue;
+                    }
+                    traceMoveV2('4step:11-rename-item', { zi: zi, defId: pz.defId, fromNewName: pz.newName, toOldName: pz.oldName });
+                    setMoveG();
+                    try {
+                        defB.setFieldValue(pz.oldName, 'NAME');
+                        traceMoveV2('4step:11-setFieldValue-ok', { defId: pz.defId });
+                    } catch (eNm) {
+                        traceMoveV2('4step:11-setFieldValue-fallback-applyRetarget', { defId: pz.defId, err: String(eNm && eNm.message || eNm) });
+                        api2.applyRetarget(pz.newName, pz.oldName);
+                    }
+                }
+                var allW = typeof Blockly.Workspace.getAll === 'function' ? Blockly.Workspace.getAll() : [];
+                for (var wi = 0; wi < allW.length; wi++) {
+                    var ww = allW[wi];
+                    if (ww && ww.refreshToolboxSelection) try { ww.refreshToolboxSelection(); } catch (eR) { /* */ }
+                }
+                if (typeof uiActions !== 'undefined' && uiActions.TaskBar && uiActions.TaskBar.setHasUnsavedChanges) {
+                    uiActions.TaskBar.setHasUnsavedChanges(true);
+                }
+                restoreGroup();
+                traceMoveV2('4step:11-rename-phase-done');
+                return ctx;
+            })
+            .then(function(ctx) {
+                traceMoveV2('4step:12-final-select', { createdIds: ctx && ctx.createdIds });
+                return switchToTabNamed(destName)
+                    .then(function() { return waitForMainWorkspaceStable(); })
+                    .then(function() {
+                        var destWs3 = Blockly.getMainWorkspace();
+                        if (destWs3 && ctx && ctx.createdIds && ctx.createdIds.length) {
+                            adamSelectPastedRoots(destWs3, ctx.createdIds);
+                            traceMoveV2('4step:12-select-done');
+                        }
+                        traceMoveV2('4step:DONE-success');
+                        return true;
+                    });
+            })
+            .catch(function(err) {
+                restoreGroup();
+                traceMoveV2('4step:FAILED', { message: String(err && err.message || err), stack: err && err.stack ? String(err.stack).slice(0, 500) : '' });
+                traceMoveV2('procedure move failed', err);
+                console.error('[MoveToTabV2] Procedure move failed:', err);
+                return false;
+            })
+            .finally(function() {
+                if (window.__adamPopSafeProcedureGetDefinition) window.__adamPopSafeProcedureGetDefinition();
+                if (typeof window.__adamInstallProcedureCallGeneratorNullGuard === 'function') {
+                    try { window.__adamInstallProcedureCallGeneratorNullGuard(); } catch (eIG) { /* */ }
+                }
+            });
+    }
+
+    /** Non–procedure-def selection: cut from source, paste on dest, optional caller restore (not the four-step procedure path). */
+    function adamMoveCutPastePathV2(destName, options, roots, rootIds, sourceTabIndex, movedProcNamesForBridge, callerBackup, xmlWrap, idSet) {
+        var cutPastePastedIds = null;
+        traceMoveV2('cutPaste:start', {
+            destName: destName,
+            sourceTabIndex: sourceTabIndex,
+            rootIds: rootIds,
+            rootTypes: roots.map(function(b) { return b && b.type; })
+        });
+        return Promise.resolve()
+            .then(function() {
+                traceMoveV2('cutPaste:1-ensure-dest-tab');
+                var existing = refreshTabsFromXml().some(function(t) { return t.name === destName; });
+                if (existing) {
+                    return switchToTabNamed(destName);
+                }
+                if (options.createIfMissing) {
+                    return createTabWithName(destName);
+                }
+                return Promise.reject(new Error('Tab does not exist'));
+            })
+            .then(function() {
+                traceMoveV2('cutPaste:2-switch-to-source-cut');
+                if (sourceTabIndex >= 0) {
+                    clickTabByIndexIfNeeded(sourceTabIndex);
+                }
+                var srcWs = Blockly.getMainWorkspace();
+                if (!srcWs) throw new Error('No workspace after switching back to source');
+                beginMoveProcedureBridge(movedProcNamesForBridge);
+                window.__adamMoveProcedureCutPhase = true;
+                var toDel = rootIds.map(function(id) {
+                    return srcWs.getBlockById(id);
+                }).filter(function(b) { return b && b.workspace === srcWs && !b.disposed; });
+                traceMoveV2('cutPaste:2-delete-on-source', { count: toDel.length });
+                deleteBlocksWithSuppression(toDel);
+
+                return switchToTabNamed(destName)
+                    .then(function() { return waitForMainWorkspaceStable(); })
+                    .then(function() {
+                        traceMoveV2('cutPaste:3-paste-on-dest');
+                        var destWs = Blockly.getMainWorkspace();
+                        if (!destWs) throw new Error('No workspace after tab switch');
+                        removeConflictingProxies(destWs, idSet);
+                        var wasGrouped = Blockly.Events.getGroup();
+                        Blockly.Events.setGroup(true);
+                        var createdIdsL;
+                        try {
+                            createdIdsL = appendDomToWorkspaceSafe(xmlWrap, destWs);
+                            window.__adamMoveProcedureCutPhase = false;
+                        } catch (pasteErr) {
+                            traceMoveV2('cutPaste:3-paste-FAILED', String(pasteErr && pasteErr.message || pasteErr));
+                            window.__adamMoveProcedureCutPhase = false;
+                            try {
+                                if (sourceTabIndex >= 0) clickTabByIndexIfNeeded(sourceTabIndex);
+                                var restoreWs = Blockly.getMainWorkspace();
+                                if (restoreWs) {
+                                    removeConflictingProxies(restoreWs, idSet);
+                                    appendDomToWorkspaceSafe(xmlWrap, restoreWs);
+                                }
+                            } catch (restoreErr) { /* ignore */ }
+                            throw pasteErr;
+                        } finally {
+                            Blockly.Events.setGroup(wasGrouped);
+                        }
+                        cutPastePastedIds = createdIdsL || [];
+                        if (!cutPastePastedIds.length) {
+                            var ch2 = xmlWrap.children;
+                            for (var cj2 = 0; cj2 < ch2.length; cj2++) {
+                                var cid2 = ch2[cj2].getAttribute && ch2[cj2].getAttribute('id');
+                                if (cid2 && destWs.getBlockById(cid2)) cutPastePastedIds.push(cid2);
+                            }
+                        }
+                        traceMoveV2('cutPaste:3-paste-ok', { cutPastePastedIds: cutPastePastedIds });
+                        adamApplyPlacementToPastedRoots(destWs, cutPastePastedIds, options._adamDestTabExistedAtStart === true, true);
+                        traceMoveV2('cutPaste:4-placement-done');
+                        if (typeof uiActions !== 'undefined' && uiActions.TaskBar && typeof uiActions.TaskBar.setHasUnsavedChanges === 'function') {
+                            uiActions.TaskBar.setHasUnsavedChanges(true);
+                        }
+                        traceMoveV2('cutPaste:5-maybeRestoreCallers');
+                        return maybeRestoreCallersAfterPaste(callerBackup, sourceTabIndex);
+                    });
+            })
+            .then(function() {
+                traceMoveV2('cutPaste:6-final-select');
+                return switchToTabNamed(destName)
+                    .then(function() { return waitForMainWorkspaceStable(); })
+                    .then(function() {
+                        var dw = Blockly.getMainWorkspace();
+                        if (dw && cutPastePastedIds && cutPastePastedIds.length) {
+                            adamSelectPastedRoots(dw, cutPastePastedIds);
+                        }
+                        traceMoveV2('cutPaste:DONE-success');
+                        return true;
+                    });
+            })
+            .catch(function(err) {
+                traceMoveV2('cutPaste:FAILED', { message: String(err && err.message || err) });
+                console.error('[MoveToTabV2]', err);
+                return false;
+            })
+            .finally(function() {
+                endMoveProcedureBridge();
+                if (typeof window.__adamInstallProcedureCallGeneratorNullGuard === 'function') {
+                    try { window.__adamInstallProcedureCallGeneratorNullGuard(); } catch (eIG) { /* */ }
+                }
+            });
+    }
+
+    window.__adamMoveBlocksToTabV2 = function(destName, options) {
+        options = options || {};
+        var ws = Blockly.getMainWorkspace();
+        if (!ws || ws.options.readOnly) {
+            console.warn('[MoveToTabV2] No workspace');
+            return Promise.resolve(false);
+        }
+        var roots = getRootsToMove(ws);
+        if (roots.length === 0) {
+            console.warn('[MoveToTabV2] Nothing selected');
+            return Promise.resolve(false);
+        }
+
+        var tabsSnapshot = refreshTabsFromXml();
+        var sourceTabs = tabsSnapshot;
+        var headerList = document.querySelectorAll('.title-bar__tab-header');
+        var activeHeaderIdx = -1;
+        for (var hi = 0; hi < headerList.length; hi++) {
+            if (headerList[hi].classList.contains('title-bar__tab-header--active')) {
+                activeHeaderIdx = hi;
+                break;
+            }
+        }
+        var sourceTabName = (activeHeaderIdx >= 0 && sourceTabs[activeHeaderIdx])
+            ? sourceTabs[activeHeaderIdx].name
+            : '';
+
+        if (!destName || !String(destName).trim()) {
+            return Promise.resolve(false);
+        }
+        destName = String(destName).trim();
+        if (destName === sourceTabName) {
+            console.warn('[MoveToTabV2] Already on this tab');
+            return Promise.resolve(false);
+        }
+
+        options._adamDestTabExistedAtStart = tabsSnapshot.some(function(t) { return t.name === destName; });
+
+        traceMoveV2('move:start', {
+            destName: destName,
+            sourceTabName: sourceTabName,
+            sourceTabIndex: activeHeaderIdx,
+            destTabExistedAtStart: options._adamDestTabExistedAtStart,
+            rootCount: roots.length,
+            rootIds: roots.map(function(b) { return b ? b.id : null; }).filter(Boolean),
+            rootTypes: roots.map(function(b) { return b && b.type; }),
+            createIfMissing: !!options.createIfMissing
+        });
+
+        var rootIds = roots.map(function(b) { return b ? b.id : null; }).filter(Boolean);
+        var sourceTabIndex = activeHeaderIdx;
+        var movedProcNamesForBridge = getMovedProcedureNames(roots);
+        var callerBackup = buildCallerBackupForMovedProcedures(ws, roots, rootIds);
+
+        detachRootsForMove(roots);
+
+        var xmlWrap = document.createElement('xml');
+        var idSet = {};
+        for (var r = 0; r < roots.length; r++) {
+            try {
+                var dom = Blockly.Xml.blockToDomWithXY(roots[r]);
+                if (dom) {
+                    collectBlockIdsFromDom(dom, idSet);
+                    xmlWrap.appendChild(dom);
+                }
+            } catch (e) {
+                console.warn('[MoveToTabV2] Serialize failed', e);
+                return Promise.resolve(false);
+            }
+        }
+
+        var hasRealProcDef = roots.some(function(b) {
+            return b && (b.type === 'procedures_defnoreturn' || b.type === 'procedures_defreturn') && !b.isProxyProcDefBlock_;
+        });
+
+        traceMoveV2('move:branch', hasRealProcDef ? 'procedure-four-step' : 'cut-paste-path');
+
+        if (hasRealProcDef) {
+            return adamMoveProcedureFourStepV2(destName, options, roots, rootIds, sourceTabIndex, xmlWrap, idSet);
+        }
+        return adamMoveCutPastePathV2(destName, options, roots, rootIds, sourceTabIndex, movedProcNamesForBridge, callerBackup, xmlWrap, idSet);
+    };
+
+    function openMoveToTabV2UI() {
+        if (document.getElementById('adam-move-to-tab-v2-overlay')) return;
+
+        invalidateAdamTabListCache();
+        var headerListUi = document.querySelectorAll('.title-bar__tab-header');
+        var activeTabIdxUi = -1;
+        for (var hUi = 0; hUi < headerListUi.length; hUi++) {
+            if (headerListUi[hUi].classList.contains('title-bar__tab-header--active')) {
+                activeTabIdxUi = hUi;
+                break;
+            }
+        }
+        var allTabsUi = refreshTabsFromXml();
+        var tabs = [];
+        for (var u = 0; u < allTabsUi.length; u++) {
+            var tabRow = allTabsUi[u];
+            var tabNm = String(tabRow && tabRow.name != null ? tabRow.name : '').trim();
+            if (tabNm.toLowerCase() === 'init') continue;
+            if (activeTabIdxUi >= 0 && tabRow.tabIndex === activeTabIdxUi) continue;
+            tabs.push(tabRow);
+        }
+
+        var overlay = document.createElement('div');
+        overlay.id = 'adam-move-to-tab-v2-overlay';
+        overlay.style.cssText = [
+            'position:fixed','top:0','left:0','right:0','bottom:0',
+            'background:transparent','z-index:10050','display:flex',
+            'align-items:center','justify-content:center','font-family:system-ui,-apple-system,Segoe UI,sans-serif'
+        ].join(';');
+
+        var panel = document.createElement('div');
+        panel.style.cssText = [
+            'background:rgba(28,28,32,0.95)','border:1px solid rgba(120,120,130,0.5)',
+            'border-radius:10px','box-shadow:0 4px 14px rgba(0,0,0,0.35)',
+            'padding:14px','width:min(300px,92vw)','max-width:92vw','max-height:80vh','overflow:auto',
+            'box-sizing:border-box',
+            'color:#e5e7eb'
+        ].join(';');
+
+        var title = document.createElement('div');
+        title.textContent = 'Move selection to tab';
+        title.style.cssText = 'font-weight:600;font-size:16px;margin-bottom:12px';
+        panel.appendChild(title);
+
+        var hint = document.createElement('div');
+        hint.style.cssText = 'font-size:12px;color:#94a3b8;margin-bottom:10px';
+        hint.textContent = 'Type to filter. Arrow keys move the highlight; Enter picks the highlighted tab, or creates from what you typed if there is no match. Shift+T opens this.';
+        panel.appendChild(hint);
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Tab name…';
+        input.style.cssText = [
+            'width:100%','box-sizing:border-box','padding:8px 10px','margin-bottom:10px',
+            'border-radius:8px','border:1px solid rgba(120,120,130,0.5)',
+            'background:#18181c','color:#e5e7eb'
+        ].join(';');
+        panel.appendChild(input);
+
+        var list = document.createElement('div');
+        list.style.cssText = 'max-height:280px;overflow:auto;border:1px solid rgba(80,80,90,0.4);border-radius:8px';
+        panel.appendChild(list);
+
+        var selectedIdx = 0;
+        var filteredTabs = tabs.slice();
+        var moving = false;
+
+        function close() {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            document.removeEventListener('keydown', onDocKey, true);
+        }
+
+        function tabNameExistsInProject(nm) {
+            return refreshTabsFromXml().some(function(t) {
+                return String(t.name != null ? t.name : '').trim() === nm;
+            });
+        }
+
+        function tryMoveToName(rawName) {
+            var name = String(rawName != null ? rawName : '').trim();
+            if (!name || moving) return;
+            moving = true;
+            var existsNow = tabNameExistsInProject(name);
+            window.__adamMoveBlocksToTabV2(name, { createIfMissing: !existsNow }).then(function() {
+                close();
+            }).finally(function() {
+                moving = false;
+            });
+        }
+
+        function renderList() {
+            list.innerHTML = '';
+            var q = (input.value || '').trim().toLowerCase();
+            filteredTabs = !q ? tabs.slice() : tabs.filter(function(t) {
+                return String(t.name).toLowerCase().indexOf(q) !== -1;
+            });
+            if (selectedIdx >= filteredTabs.length) selectedIdx = Math.max(0, filteredTabs.length - 1);
+            for (var i = 0; i < filteredTabs.length; i++) {
+                (function(row, idx) {
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.textContent = row.name;
+                    btn.style.cssText = [
+                        'display:block','width:100%','text-align:left','padding:8px 10px',
+                        'border:none','border-bottom:1px solid rgba(60,60,70,0.5)',
+                        'background:' + (idx === selectedIdx ? 'rgba(5,120,90,0.35)' : 'transparent'),
+                        'color:#e5e7eb','cursor:pointer','font-size:14px'
+                    ].join(';');
+                    btn.addEventListener('mouseenter', function() {
+                        if (idx !== selectedIdx) btn.style.background = 'rgba(255,255,255,0.06)';
+                    });
+                    btn.addEventListener('mouseleave', function() {
+                        btn.style.background = idx === selectedIdx ? 'rgba(5,120,90,0.35)' : 'transparent';
+                    });
+                    btn.addEventListener('click', function() {
+                        tryMoveToName(row.name);
+                    });
+                    list.appendChild(btn);
+                })(filteredTabs[i], i);
+            }
+            if (filteredTabs.length === 0) {
+                var empty = document.createElement('div');
+                empty.style.cssText = 'padding:10px;color:#94a3b8;font-size:13px';
+                empty.textContent = 'No matches — type a name above and press Enter to create that tab.';
+                list.appendChild(empty);
+            }
+        }
+        renderList();
+        input.addEventListener('input', function() {
+            selectedIdx = 0;
+            renderList();
+        });
+
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) close();
+        });
+
+        function onDocKey(e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                close();
+                return;
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (!filteredTabs.length) return;
+                selectedIdx = Math.min(filteredTabs.length - 1, selectedIdx + 1);
+                renderList();
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (!filteredTabs.length) return;
+                selectedIdx = Math.max(0, selectedIdx - 1);
+                renderList();
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (filteredTabs.length > 0 && filteredTabs[selectedIdx]) {
+                    tryMoveToName(filteredTabs[selectedIdx].name);
+                } else {
+                    tryMoveToName(input.value);
+                }
+            }
+        }
+        document.addEventListener('keydown', onDocKey, true);
+
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+        input.focus();
+    }
+
+    window.openMoveToTabV2UI = openMoveToTabV2UI;
+
+    window.addEventListener('keydown', function(e) {
+        if (!e.shiftKey || String(e.key).toLowerCase() !== 't') return;
+        if (typeof __adamIsTypingTarget === 'function' && __adamIsTypingTarget(e.target)) return;
+        if (!Blockly || !Blockly.getMainWorkspace()) return;
+        e.preventDefault();
+        openMoveToTabV2UI();
+    }, true);
+  })();`;
+}
+</script>

@@ -1,0 +1,26 @@
+<category name="Adam's Custom Tools" color="#de3900">
+    <block type="shortCutsBlock"></block>
+    <block type="grabBlock"></block>
+    <block type="improvedSearch"></block>
+    <block type="minimap"></block>
+    <block type="addMenuBlock"></block>      
+</category>
+
+<script>
+    function code() {
+      return `
+
+        // ✅ Embedded Block Database (AUTO-INJECTED)
+        /*__BLOCK_DB__*/ 
+
+        const originalPrepare = puzzlesEditorPreparePreloader;
+        puzzlesEditorPreparePreloader = function(preloader, PE) {
+            window.__PE__ = PE;
+            console.log('✅ Captured Puzzle Editor:', PE);
+
+            return originalPrepare(preloader, PE);
+        };
+
+      `;
+    }
+</script>

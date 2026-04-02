@@ -9,7 +9,6 @@ function code(block) {
     return `(function() {
         const params = new URLSearchParams(window.location.search);
         if (!params.has('logic') || !window.__PE__) {
-            console.log('%c[Improved Search] Missing logic parameter or __PE__ not available', 'color: orange; font-weight: bold;');
             return;
         }
 
@@ -804,8 +803,7 @@ function code(block) {
             if (!cachedBlocks.length) refreshBlockCache();
             if (!Blockly.selected) return console.warn("[Search] No block selected.");
             const found = cachedBlocks.find(b => b.id === Blockly.selected.id);
-            found ? console.log("[Search] Cached object for selected block:", found)
-                  : console.warn("[Search] Selected block not found in cache.");
+            if (!found) console.warn("[Search] Selected block not found in cache.");
         };
 
         // 🔹 Process selected block and print searchable text
@@ -848,15 +846,7 @@ function code(block) {
 
                 // Block text = type + fields + mutation.name only
                 const ownText = [type, fields, mutationName].filter(Boolean).join(' ');
-
-                // Print results
-                console.log('%c[Search] Selected Block Searchable Text:', 'color: #5b8cff; font-weight: bold; font-size: 14px;');
-                console.log('Type:', type);
-                console.log('Fields:', fields || '(none)');
-                console.log('Mutation Name:', mutationName || '(none)');
-                console.log('Combined Searchable Text:', ownText);
-                console.log('Normalized:', normalize(ownText));
-                console.log('Block ID:', block.id);
+                return ownText;
             } catch (e) {
                 console.error("[Search] Error processing selected block:", e);
             }

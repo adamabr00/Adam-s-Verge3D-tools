@@ -1,0 +1,66 @@
+Here’s the short version of what we discovered about the Verge3D Puzzle editor (its Blockly fork) while chasing default/shadow inputs:
+
+What we learned
+
+Toolbox source of truth = workspace.options.languageTree.
+Verge3D exposes the toolbox as ws.options.languageTree. Sometimes it’s a DOM-like tree (<category><block>…) and sometimes a JSON-ish array (what you pasted). In the JSON-ish form each BLOCK item often carries a special blockxml field that (once populated) is an actual Element containing the template XML (with <shadow> and default fields).
+
+Shadows/defaults live inside the toolbox <block> XML.
+If you get the toolbox’s <block …>…</block> node and pass it through Blockly.Xml.domToBlock, Blockly instantiates a block with the same shadow inputs and default field values as the flyout shows.
+
+No need for utils.xml; use the core XML API.
+The correct helpers in this fork are:
+
+Blockly.Xml.textToDom(xmlString)
+
+Blockly.Xml.domToBlock(element, workspace)
+Using Blockly.utils.xml.textToDom was the reason for the earlier error.
+
+You can create from a DOM node or from outerHTML.
+Both work:
+
+Blockly.Xml.domToBlock(blockElement, ws)
+
+Blockly.Xml.domToBlock(Blockly.Xml.textToDom(blockOuterHTML), ws)
+
+Not every toolbox entry has a ready-made XML template.
+Many custom/variable/procedure blocks (and some core ones) start with blockxml: {} or rely on lazy generation. In those cases:
+
+If blockxml is already a real Element → you’re good (use it).
+
+If blockxml is empty/missing → you’ll get no shadows when falling back to ws.newBlock(type). Those blocks either:
+
+Get their shadows/mutations added when a category/flyout is built (“lazy init”), or
+
+Don’t use shadows at all and instead set default fields in init()/extensions.
+
+Opening the flyout can populate blockxml.
+In this Verge3D build, some categories fill blockxml only after the flyout renders them once. That’s why the “open flyout briefly, capture template, close it” trick worked. If the language tree is already populated (like your latest dump), you can skip opening the flyout.
+
+Types can contain quotes/slashes.
+Custom types like "Adam's Awesome Tools/addMenuBlock" exist. When querying DOM toolboxes, use CSS.escape(type).
+
+allow-init is a Verge3D flag.
+You’ll see allow-init: true in the language tree. That’s Puzzle-specific metadata (e.g., allowing a block’s init in certain contexts). It’s not standard Blockly; just don’t strip it if you mirror entries.
+
+Practical implications for your plugin
+
+To build blocks with default shadows:
+
+Look up the toolbox template by type in ws.options.languageTree.
+
+If blockxml is a real Element, clone it and call Blockly.Xml.domToBlock.
+
+If it’s missing/empty, fall back to ws.newBlock(type) (no shadows), or use your earlier “open flyout once, capture, close” fallback.
+
+Your helper should handle both toolbox shapes (DOM or JSON-ish) and special characters in types. That’s what the getToolboxBlockElementByType + createBlockFromToolbox helpers do.
+
+When a block has no toolbox XML ever, the only way to get “defaults” is to:
+
+Set fields after creation (what your setBlockDefaults does), and/or
+
+Programmatically create and connect shadow blocks to inputs.
+
+Why this matters
+
+You now have a reliable, flyout-free path when XML is present and a graceful fallback when it isn’t. That’s the same internal path the flyout uses to produce blocks with shadows—just without the UI dance.

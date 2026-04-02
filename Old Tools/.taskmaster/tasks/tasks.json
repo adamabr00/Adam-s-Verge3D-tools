@@ -1,0 +1,301 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Complete Block Movement System",
+        "description": "Implement the core block movement functionality for the Step Block with keyboard shortcuts ('u' for up, 'j' for down) and proper validation to prevent invalid moves.",
+        "details": "This task involves completing the movement system that's partially implemented in stepBlock.js. Need to ensure proper handling of complex block structures including nested stacks and statement inputs. The system should maintain visual positioning during moves and provide clear console feedback.",
+        "testStrategy": "Test with various block configurations: single blocks, chains of blocks, nested stacks, and statement inputs. Verify that invalid moves are prevented and valid moves work correctly.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [],
+        "subtasks": []
+      },
+      {
+        "id": "2",
+        "title": "Enhance Error Handling and Validation",
+        "description": "Improve the error handling system to provide better user feedback and prevent structural damage to block chains.",
+        "details": "Add comprehensive validation for block movements, including checks for circular references, invalid connections, and structural integrity. Implement better error messages and console logging for debugging.",
+        "testStrategy": "Create test cases with intentionally broken block structures and verify that the system prevents damage and provides helpful error messages.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": ["1"],
+        "subtasks": []
+      },
+      {
+        "id": "3",
+        "title": "Add Visual Feedback for Block Movements",
+        "description": "Implement visual feedback to show users when blocks are being moved and provide confirmation of successful movements.",
+        "details": "Add visual indicators during block movement operations, such as highlighting the moving block, showing movement direction, and providing visual confirmation when moves are completed or blocked.",
+        "testStrategy": "Test visual feedback in different scenarios and ensure it doesn't interfere with the movement functionality or create visual clutter.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["1"],
+        "subtasks": []
+      },
+      {
+        "id": "4",
+        "title": "Create Additional Custom Block Types",
+        "description": "Develop new custom block types beyond the current Label Field and Step Block to expand the functionality of Adam's Awesome Tools.",
+        "details": "Design and implement new block types that would be useful for Verge3D puzzle creation, such as blocks for 3D object manipulation, animation controls, or advanced logic operations.",
+        "testStrategy": "Create test puzzles using the new block types and verify they integrate properly with the existing system and provide the intended functionality.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["2"],
+        "subtasks": []
+      },
+      {
+        "id": "5",
+        "title": "Implement Undo/Redo Functionality",
+        "description": "Add undo and redo capabilities for block operations to improve user experience and prevent accidental loss of work.",
+        "details": "Implement a command pattern or similar system to track block operations and allow users to undo/redo their actions. This should work with both movement operations and other block manipulations.",
+        "testStrategy": "Test undo/redo with various sequences of operations and verify that the system correctly restores previous states without breaking block relationships.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["3"],
+        "subtasks": []
+      },
+      {
+        "id": "6",
+        "title": "Add Block Grouping and Multi-Selection",
+        "description": "Implement the ability to select and move multiple blocks as a group, enhancing the efficiency of complex puzzle creation.",
+        "details": "Allow users to select multiple blocks (using Ctrl+click or similar) and move them as a unit. This should maintain the relative positions and connections within the selected group.",
+        "testStrategy": "Test multi-selection with various block configurations and verify that group movements preserve internal relationships while properly handling external connections.",
+        "status": "pending",
+        "priority": "low",
+        "dependencies": ["4"],
+        "subtasks": []
+      },
+      {
+        "id": "7",
+        "title": "Optimize Performance for Large Block Chains",
+        "description": "Improve the performance of the movement system to handle large numbers of blocks efficiently without causing lag or slowdowns.",
+        "details": "Analyze and optimize the movement algorithms, especially for scenarios with many blocks or complex nested structures. Consider implementing batch operations and efficient rendering updates.",
+        "testStrategy": "Create stress tests with large numbers of blocks and measure performance metrics. Ensure the system remains responsive even with complex block structures.",
+        "status": "pending",
+        "priority": "low",
+        "dependencies": ["5"],
+        "subtasks": []
+      },
+      {
+        "id": "8",
+        "title": "Add Accessibility Features",
+        "description": "Implement accessibility improvements to make the block movement system usable by people with disabilities.",
+        "details": "Add screen reader support, keyboard navigation improvements, and other accessibility features to ensure the tools can be used by a wider audience.",
+        "testStrategy": "Test with screen readers and keyboard-only navigation to ensure all functionality is accessible. Verify compliance with accessibility standards.",
+        "status": "pending",
+        "priority": "low",
+        "dependencies": ["6"],
+        "subtasks": []
+      },
+      {
+        "id": "9",
+        "title": "Create Documentation and User Guides",
+        "description": "Develop comprehensive documentation for users of Adam's Awesome Tools, including installation guides, usage tutorials, and API documentation.",
+        "details": "Create user-friendly documentation that explains how to use the custom blocks and movement features. Include examples, best practices, and troubleshooting guides.",
+        "testStrategy": "Have users follow the documentation to complete common tasks and verify that the instructions are clear and accurate.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["7"],
+        "subtasks": []
+      },
+      {
+        "id": "10",
+        "title": "Implement Testing Framework",
+        "description": "Set up automated testing for the block movement system and custom blocks to ensure reliability and prevent regressions.",
+        "details": "Create unit tests for individual functions, integration tests for block interactions, and end-to-end tests for complete user workflows. Set up continuous integration if appropriate.",
+        "testStrategy": "Implement comprehensive test coverage and verify that all tests pass consistently. Use tests to catch regressions during development.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": ["2"],
+        "subtasks": []
+      },
+      {
+        "id": "11",
+        "title": "Add Custom Block Templates and Wizards",
+        "description": "Create templates and wizards to help users quickly create common block patterns and configurations.",
+        "details": "Develop pre-built block templates for common puzzle patterns and interactive wizards that guide users through creating complex block structures.",
+        "testStrategy": "Test the templates and wizards with users to ensure they save time and produce correct results. Verify that generated blocks work properly in puzzles.",
+        "status": "pending",
+        "priority": "low",
+        "dependencies": ["9"],
+        "subtasks": []
+      },
+      {
+        "id": "12",
+        "title": "Implement Block Validation and Error Checking",
+        "description": "Add comprehensive validation for custom blocks to ensure they work correctly and provide helpful error messages when issues are detected.",
+        "details": "Create validation systems that check block configurations, connections, and usage patterns. Provide real-time feedback to users about potential issues.",
+        "testStrategy": "Create test cases with intentionally problematic block configurations and verify that the validation system catches issues and provides helpful guidance.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["10"],
+        "subtasks": []
+      },
+      {
+        "id": "13",
+        "title": "Add Advanced Block Properties and Configurations",
+        "description": "Implement advanced configuration options for custom blocks, allowing users to customize behavior and appearance.",
+        "details": "Add properties panels, configuration dialogs, and advanced settings for custom blocks. Allow users to save and load custom configurations.",
+        "testStrategy": "Test configuration options with various settings and verify that blocks behave correctly with different configurations. Ensure configurations are properly saved and loaded.",
+        "status": "pending",
+        "priority": "low",
+        "dependencies": ["11"],
+        "subtasks": []
+      },
+      {
+        "id": "14",
+        "title": "Create Integration Examples and Demos",
+        "description": "Develop example puzzles and demonstrations that showcase the capabilities of Adam's Awesome Tools.",
+        "details": "Create sample puzzles that demonstrate the movement system, custom blocks, and advanced features. Include step-by-step tutorials and interactive demos.",
+        "testStrategy": "Have users complete the example puzzles and tutorials to verify they effectively demonstrate the tool's capabilities and are easy to follow.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["12"],
+        "subtasks": []
+      },
+      {
+        "id": "15",
+        "title": "Final Testing and Quality Assurance",
+        "description": "Conduct comprehensive testing of the entire Adam's Awesome Tools system to ensure it's ready for production use.",
+        "details": "Perform thorough testing including functional testing, performance testing, compatibility testing, and user acceptance testing. Fix any issues found and prepare for release.",
+        "testStrategy": "Create a comprehensive test plan covering all features and scenarios. Execute tests systematically and document results. Ensure all critical issues are resolved.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": ["13", "14"],
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "created": "2024-12-19T10:00:00Z",
+      "lastModified": "2024-12-19T10:00:00Z",
+      "totalTasks": 15,
+      "tags": {
+        "master": {
+          "name": "master",
+          "description": "Main development branch",
+          "taskCount": 15,
+          "created": "2024-12-19T10:00:00Z"
+        }
+      },
+      "description": "Tasks for master context",
+      "updated": "2024-12-19T10:00:00Z"
+    }
+  },
+  "feature-new-block-types": {
+    "tasks": [],
+    "metadata": {
+      "created": "2025-07-26T17:22:42.482Z",
+      "updated": "2025-07-26T17:22:42.482Z",
+      "description": "Development of new custom block types for enhanced puzzle functionality"
+    }
+  },
+  "feature-block-duplication": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Implement Shift+D Keyboard Shortcut Detection",
+        "description": "Add keyboard event handling for Shift+D to trigger block duplication when a block is selected.",
+        "details": "Extend the existing keyboard event handler in stepBlock.js to detect Shift+D key combination. Only activate when a block is selected in the workspace. Provide clear console feedback when duplication is triggered or when no block is selected.",
+        "testStrategy": "Test with various scenarios: no block selected, single block selected, multiple blocks selected. Verify that the shortcut only works when appropriate and provides helpful feedback.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [],
+        "subtasks": []
+      },
+      {
+        "id": "2",
+        "title": "Create Block Duplication Engine",
+        "description": "Implement the core block duplication functionality that creates an exact copy of the selected block.",
+        "details": "Use Blockly's built-in duplication methods to create an identical copy of the selected block. Preserve all block properties, connections, and configurations. Generate a unique identifier for the duplicated block and maintain its type and category information.",
+        "testStrategy": "Test duplication with various block types including custom blocks, blocks with connections, and blocks with complex properties. Verify that all properties are preserved correctly.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": ["1"],
+        "subtasks": []
+      },
+      {
+        "id": "3",
+        "title": "Implement Cursor-Following Behavior",
+        "description": "Make the duplicated block appear at cursor position and follow mouse movement until placed.",
+        "details": "Position the duplicated block at the current mouse cursor position when duplication is triggered. Implement real-time mouse tracking so the block follows cursor movement smoothly. Show the block in a semi-transparent or highlighted state to indicate it's in placement mode.",
+        "testStrategy": "Test cursor following performance and smoothness. Verify that the block follows the cursor accurately without lag. Test with different mouse speeds and movement patterns.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": ["2"],
+        "subtasks": []
+      },
+      {
+        "id": "4",
+        "title": "Add Left-Click Placement System",
+        "description": "Implement left-click functionality to place the duplicated block in the workspace.",
+        "details": "Detect left mouse clicks when a block is in placement mode. Validate that the placement location is valid (within workspace bounds, compatible with nearby blocks). Automatically connect to nearby compatible blocks if possible. Handle placement errors gracefully.",
+        "testStrategy": "Test placement in various scenarios: empty workspace, near other blocks, in invalid locations. Verify that connections are made correctly and invalid placements are prevented.",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": ["3"],
+        "subtasks": []
+      },
+      {
+        "id": "5",
+        "title": "Add Visual Feedback and Preview States",
+        "description": "Implement visual indicators to show the duplication state and provide clear user feedback.",
+        "details": "Add visual feedback when duplication is triggered (e.g., block highlighting, cursor changes). Show the duplicated block in a distinct visual state (semi-transparent, different border, etc.) while it's being placed. Provide clear visual confirmation when placement is successful or blocked.",
+        "testStrategy": "Test visual feedback in different scenarios and ensure it doesn't interfere with existing functionality. Verify that the visual states are clear and intuitive for users.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["4"],
+        "subtasks": []
+      },
+      {
+        "id": "6",
+        "title": "Implement Cancel Functionality",
+        "description": "Add right-click and Escape key support to cancel the duplication process.",
+        "details": "Allow users to cancel the duplication process by pressing Escape or right-clicking. Properly clean up the temporary duplicated block and restore the workspace to its previous state. Provide clear feedback when cancellation occurs.",
+        "testStrategy": "Test cancellation in various states: during cursor following, after partial placement attempts, etc. Verify that cleanup is thorough and no artifacts remain.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["5"],
+        "subtasks": []
+      },
+      {
+        "id": "7",
+        "title": "Optimize Performance and Memory Management",
+        "description": "Ensure smooth 60fps cursor following and proper memory cleanup for temporary blocks.",
+        "details": "Optimize the cursor tracking algorithm for smooth 60fps performance. Implement proper memory management to clean up temporary blocks immediately when placement is cancelled or completed. Minimize memory overhead during duplication operations.",
+        "testStrategy": "Test performance with many blocks in the workspace. Measure memory usage during duplication operations. Verify that performance remains smooth even in complex scenarios.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["6"],
+        "subtasks": []
+      },
+      {
+        "id": "8",
+        "title": "Integration Testing and Documentation",
+        "description": "Test the duplication feature with existing systems and create user documentation.",
+        "details": "Test the duplication feature alongside the existing movement system ('u'/'j' keys) to ensure they work together harmoniously. Create user documentation explaining how to use the duplication feature. Test with various block types and complex workspace configurations.",
+        "testStrategy": "Comprehensive integration testing with existing features. User testing to ensure the feature is intuitive and efficient. Documentation review to ensure clarity and completeness.",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": ["7"],
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "created": "2024-12-19T10:00:00Z",
+      "lastModified": "2024-12-19T10:00:00Z",
+      "totalTasks": 8,
+      "tags": {
+        "feature-block-duplication": {
+          "name": "feature-block-duplication",
+          "description": "Block duplication system with Shift+D shortcut and cursor-following behavior",
+          "taskCount": 8,
+          "created": "2024-12-19T10:00:00Z"
+        }
+      }
+    }
+  }
+}

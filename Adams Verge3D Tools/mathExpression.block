@@ -11,7 +11,6 @@ function code(block) {
         // ✅ Check if URL contains 'logic' parameter
   const params = new URLSearchParams(window.location.search);
   if (!params.has('logic')) {
-    console.log('%c[Math Expression to Puzzle skipped] No "logic" parameter in URL.', 'color: orange; font-weight: bold;');
     return;
   }
 
@@ -48,15 +47,12 @@ function code(block) {
   let currentHistoryIndex = -1;
 
   // Load math.js immediately for real-time parsing
-  loadMathJS(() => {
-    console.log('Math.js loaded for real-time parsing');
-  });
+  loadMathJS(function () {});
 
   // AST to Blockly blocks
   function astToBlocks_mathjs(node, workspace) {
     switch(node.type) {
       case "ConstantNode":
-        console.log('ConstantNode:', node.value, 'type:', typeof node.value);
         let num = workspace.newBlock('math_number');
         num.setFieldValue(node.value, 'NUM');
         num.initSvg(); num.render();
@@ -82,9 +78,6 @@ function code(block) {
 
 
             case "OperatorNode":
-        // Debug logging to understand the structure
-        console.log('OperatorNode:', node.op, 'args:', node.args);
-        
         // Handle unary operators (negative numbers and logical NOT)
         if (node.args.length === 1) {
           if (node.fn === 'unaryMinus') {
@@ -300,16 +293,11 @@ function code(block) {
 
   // Parse complex logical expressions with multiple operators
   function parseComplexLogicalExpression(expr, workspace) {
-    console.log('Parsing complex logical expression:', expr);
-    
     // Helper function to find the top-level logical operator (respecting parentheses)
     function findTopLevelOperator(expression) {
-      console.log('Finding top-level operator in:', expression);
-      
       // If the expression is wrapped in parentheses, remove them and look inside
       if (expression.startsWith('(') && expression.endsWith(')')) {
         const innerExpr = expression.substring(1, expression.length - 1);
-        console.log('Removing outer parentheses, looking in:', innerExpr);
         return findTopLevelOperator(innerExpr);
       }
       
@@ -321,17 +309,14 @@ function code(block) {
         else if (parenCount === 0) {
           // Check for && (must check before || to avoid partial matches)
           if (expression.substring(i, i + 2) === '&&') {
-            console.log('Found && at index', i);
             return { operator: '&&', index: i };
           }
           // Check for ||
           if (expression.substring(i, i + 2) === '||') {
-            console.log('Found || at index', i);
             return { operator: '||', index: i };
           }
         }
       }
-      console.log('No top-level operator found');
       return null;
     }
     
@@ -397,21 +382,15 @@ function code(block) {
       // Split at the top-level operator
       const leftExpr = expr.substring(0, topOp.index).trim();
       const rightExpr = expr.substring(topOp.index + topOp.operator.length).trim();
-      
-      console.log('Split at', topOp.operator, ':', leftExpr, '|', rightExpr);
-      
+
       // Clean up any remaining outer parentheses from the split parts
       const cleanLeftExpr = leftExpr.startsWith('(') && leftExpr.endsWith(')') ? 
         leftExpr.substring(1, leftExpr.length - 1) : leftExpr;
       const cleanRightExpr = rightExpr.startsWith('(') && rightExpr.endsWith(')') ? 
         rightExpr.substring(1, rightExpr.length - 1) : rightExpr;
-      
-      console.log('Cleaned expressions:', cleanLeftExpr, '|', cleanRightExpr);
-      
+
       // Recursively parse both sides
-      console.log('Parsing left side:', cleanLeftExpr);
       const leftBlock = parseComplexLogicalExpression(cleanLeftExpr, workspace);
-      console.log('Parsing right side:', cleanRightExpr);
       const rightBlock = parseComplexLogicalExpression(cleanRightExpr, workspace);
       
       // Create the logical operation block
@@ -1274,12 +1253,9 @@ function code(block) {
       if (!adamTypingActive()) {
         e.preventDefault();
         window.__adamOpenMathExpression();
-        console.log('pressed Show');
       }
     }
   });
-
-  console.log('%c[Shift+C enabled] Type a math expression and convert it into blocks.', 'color: lime; font-weight: bold;');
 })();
 `;
 }

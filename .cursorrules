@@ -187,6 +187,6 @@ For detailed information, see:
 ## Plugin-Specific Context
 
 This plugin is "Adam's Awesome Tools" (directory: `Adams Verge3D Tools`):
-- Contains multiple utility blocks: `masterBlock`, `shortCutsBlock`, `improvedSearch`, `minimap`, `addMenuBlock`, `grabBlock`, `mathExpression`
+- Contains multiple utility blocks: `masterBlock`, `shortCutsBlock`, `improvedSearch`, `minimap`, `addMenuBlock`, `grabBlock`, `mathExpression`, `procedureRetargetLoader`, `moveToTabV2`, etc.
 - `masterBlock` is a wrapper that loads all other blocks in a statement input
 - Blocks use short type names in `init.plug` (e.g., `masterBlock`, not `Adam's Awesome Tools/masterBlock`)

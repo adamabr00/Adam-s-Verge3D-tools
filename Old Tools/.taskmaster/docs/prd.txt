@@ -1,0 +1,155 @@
+# Adam's Awesome Tools - Verge3D Blockly Extension PRD
+
+## Overview
+Adam's Awesome Tools is a custom Verge3D Blockly extension that enhances the puzzle creation experience with advanced block manipulation capabilities. The extension provides intuitive keyboard shortcuts for moving blocks within chains, making puzzle development more efficient and user-friendly. The project targets Verge3D developers and puzzle creators who need enhanced block management tools.
+
+## Core Features
+
+### 1. Custom Block Types
+- **Label Field Block**: A simple dummy block that adds visual labels and console logging functionality
+- **Step Block**: Advanced block with keyboard-based movement capabilities
+- **Custom Category**: "Adam's Custom Tools" category with distinctive orange color (#de3900)
+
+### 2. Block Movement System
+- **Keyboard Shortcuts**: 'u' key moves blocks up in chain, 'j' key moves blocks down
+- **Smart Movement Logic**: Prevents invalid moves that would break block structure
+- **Stack Preservation**: Maintains visual positioning and layout during moves
+- **Local Stack Support**: Handles movement within statement inputs (inner stacks)
+
+### 3. Plugin Integration
+- **Verge3D Integration**: Seamless integration with Verge3D puzzle system
+- **Blockly v8 Compatibility**: Built for the latest Blockly version
+- **Category Organization**: Custom category for easy discovery and use
+
+## User Experience
+
+### Primary User Persona
+- **Verge3D Developers**: Creating interactive 3D puzzles and experiences
+- **Puzzle Designers**: Building complex block-based logic flows
+- **Blockly Power Users**: Need efficient block manipulation tools
+
+### Key User Flows
+1. **Block Creation**: User drags custom blocks from "Adam's Custom Tools" category
+2. **Block Movement**: User selects a block and uses 'u'/'j' keys to reposition it
+3. **Visual Feedback**: Console logs provide movement confirmation and error handling
+4. **Structure Validation**: System prevents invalid moves that would break block chains
+
+### UI/UX Considerations
+- **Visual Distinction**: Orange color scheme makes custom blocks easily identifiable
+- **Keyboard Efficiency**: Single-key shortcuts for common operations
+- **Error Prevention**: Smart logic prevents structural damage to block chains
+- **Console Feedback**: Clear logging for debugging and user feedback
+
+## Technical Architecture
+
+### System Components
+- **Block Definitions**: XML-based block templates with custom JavaScript
+- **Plugin Initialization**: init.plug file registers blocks and categories
+- **Movement Engine**: JavaScript-based block manipulation system
+- **Event Handling**: Keyboard event listeners for movement shortcuts
+
+### Data Models
+- **Block Structure**: Hierarchical block connections (previous/next/parent)
+- **Input Types**: Support for statement inputs and dummy blocks
+- **Position Tracking**: Relative positioning system for visual consistency
+
+### APIs and Integrations
+- **Blockly API**: Direct integration with Blockly's block manipulation methods
+- **Verge3D Puzzle System**: Plugin registration and category management
+- **DOM Events**: Keyboard event handling for user interactions
+
+### Infrastructure Requirements
+- **File Structure**: Organized block definitions and JavaScript files
+- **Plugin Loading**: Verge3D plugin system integration
+- **Browser Compatibility**: Modern browser support for Blockly v8
+
+## Development Roadmap
+
+### Phase 1: Foundation (MVP)
+- Complete block movement system with up/down functionality
+- Robust error handling and validation
+- Console logging for debugging
+- Basic block types (Label Field, Step Block)
+
+### Phase 2: Enhanced Block Types
+- Additional custom block types for common puzzle operations
+- Advanced block properties and configurations
+- Custom input types and value blocks
+- Block validation and error checking
+
+### Phase 3: Advanced Features
+- Visual feedback for block movements
+- Undo/redo functionality for block operations
+- Block grouping and multi-selection
+- Custom block templates and wizards
+
+### Phase 4: Integration & Polish
+- Performance optimization for large block chains
+- Accessibility improvements (screen reader support)
+- Documentation and user guides
+- Testing and quality assurance
+
+## Logical Dependency Chain
+
+### Foundation First
+1. **Block Definition System**: XML templates and JavaScript code generation
+2. **Plugin Registration**: Category creation and block registration
+3. **Basic Movement**: Core up/down movement functionality
+4. **Error Handling**: Validation and prevention of invalid moves
+
+### Usable Frontend
+1. **Visual Integration**: Blocks appear in Verge3D puzzle interface
+2. **Keyboard Shortcuts**: Immediate usability with 'u'/'j' keys
+3. **Console Feedback**: User can see movement results
+4. **Stack Handling**: Support for complex block structures
+
+### Progressive Enhancement
+1. **Additional Block Types**: Expand beyond current dummy blocks
+2. **Advanced Movement**: Multi-block selection and movement
+3. **Visual Enhancements**: Better feedback and animations
+4. **Performance**: Optimization for complex scenarios
+
+## Risks and Mitigations
+
+### Technical Challenges
+- **Blockly API Changes**: Risk of breaking changes in Blockly updates
+  - *Mitigation*: Version pinning and compatibility testing
+- **Complex Block Structures**: Risk of breaking nested block relationships
+  - *Mitigation*: Comprehensive validation and testing
+- **Performance Issues**: Risk of slowdown with large block chains
+  - *Mitigation*: Efficient algorithms and optimization
+
+### MVP Scope Management
+- **Feature Creep**: Risk of adding too many features too quickly
+  - *Mitigation*: Focus on core movement functionality first
+- **User Adoption**: Risk of low adoption due to complexity
+  - *Mitigation*: Simple, intuitive keyboard shortcuts
+- **Integration Issues**: Risk of conflicts with other Verge3D plugins
+  - *Mitigation*: Proper namespacing and isolation
+
+### Resource Constraints
+- **Development Time**: Risk of scope exceeding available time
+  - *Mitigation*: Prioritize core functionality over nice-to-have features
+- **Testing Complexity**: Risk of insufficient testing coverage
+  - *Mitigation*: Automated testing for critical movement functions
+
+## Appendix
+
+### Current Implementation Status
+- **Label Field Block**: ✅ Implemented with basic console logging
+- **Step Block**: ✅ Implemented with movement functionality
+- **Plugin Registration**: ✅ Category and block registration working
+- **Movement System**: ✅ Up/down movement with validation
+- **Error Handling**: ✅ Prevents invalid moves and provides feedback
+
+### Technical Specifications
+- **Blockly Version**: v8 compatibility
+- **Verge3D Version**: Latest puzzle system integration
+- **Browser Support**: Modern browsers with ES6+ support
+- **File Structure**: Organized plugin structure with separate block definitions
+
+### Research Findings
+- **User Needs**: Puzzle creators need efficient block manipulation tools
+- **Existing Solutions**: Limited keyboard shortcuts in standard Blockly
+- **Market Gap**: No comprehensive block movement tools for Verge3D
+- **Technical Feasibility**: Blockly API supports all required functionality 

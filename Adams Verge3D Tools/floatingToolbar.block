@@ -1,4 +1,4 @@
-<template color="#0284B1" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Optional draggable horizontal icon bar: Add block (Shift+A), Local view (Shift+H), Math (Shift+C), Minimap, Improved search (Shift+F), layout Align / Space. Drag the grip to move; position is remembered per app URL via the browser (localStorage), not inside the .blend / puzzle file. Requires ?logic. Chain after other Adam puzzles in Master.">
+<template color="#0284B1" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Optional draggable horizontal icon bar: Add block (Shift+A), Local view (Shift+H), Math (Shift+C), Minimap, Improved search (Shift+F), Move to tab (Shift+T), layout Align / Space. Drag the grip to move; position is remembered per app URL via the browser (localStorage), not inside the .blend / puzzle file. Requires ?logic. Chain after other Adam puzzles in Master.">
     <dummy>
         <label>Floating toolbar</label>
     </dummy>
@@ -9,11 +9,9 @@ function code(block) {
   return `(function() {
   var params = new URLSearchParams(window.location.search);
   if (!params.has('logic')) {
-    console.log('[Floating toolbar] Skipped: no ?logic param.');
     return;
   }
   if (window.__adamFloatingToolbarInstalled) {
-    console.log('[Floating toolbar] Already installed.');
     return;
   }
   window.__adamFloatingToolbarInstalled = true;
@@ -325,17 +323,26 @@ function code(block) {
   var btnAlign = null;
   var btnSpace = null;
   var btnMinimap = null;
+  var btnMoveToTab = null;
 
   var LABEL_LOCAL = 'Local view (Shift+H)';
   var LABEL_ALIGN = 'Layout align (Shift+Q preview)';
   var LABEL_SPACE = 'Layout spacing (Shift+E preview)';
+  var LABEL_MOVE_TAB = 'Move to tab (Shift+T)';
 
   function updateToolbarState() {
     tryAttachBlocklyListener();
     var n = getSelectedBlockCount();
+    var ws = typeof Blockly !== 'undefined' && Blockly.getMainWorkspace ? Blockly.getMainWorkspace() : null;
+    var readOnly = ws && ws.options && ws.options.readOnly;
     applyDisabled(btnLocal, n < 1, LABEL_LOCAL, 'select at least one block');
     applyDisabled(btnAlign, n < 2, LABEL_ALIGN, 'select at least two blocks');
     applyDisabled(btnSpace, n < 2, LABEL_SPACE, 'select at least two blocks');
+    if (btnMoveToTab) {
+      var disTab = readOnly || n < 1;
+      var hintTab = readOnly ? 'read-only workspace' : 'select at least one block';
+      applyDisabled(btnMoveToTab, disTab, LABEL_MOVE_TAB, hintTab);
+    }
 
     var mv = getMinimapVisibilityState();
     if (btnMinimap) {
@@ -395,6 +402,16 @@ function code(block) {
       kind: 'stroke'
     },
     {
+      key: 'moveTab',
+      label: LABEL_MOVE_TAB,
+      svg: '<rect x="2.5" y="5" width="7.5" height="14" rx="1.5" fill="none"/><rect x="14" y="5" width="7.5" height="14" rx="1.5" fill="none"/><path d="M11 9l3 3-3 3"/>',
+      run: function() {
+        if (getSelectedBlockCount() < 1) return;
+        callFn('Move to tab (moveToTabV2)', window.openMoveToTabV2UI);
+      },
+      kind: 'stroke'
+    },
+    {
       key: 'align',
       label: LABEL_ALIGN,
       svg: '<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h14"/>',
@@ -424,6 +441,7 @@ function code(block) {
     if (row.key === 'align') btnAlign = b;
     if (row.key === 'space') btnSpace = b;
     if (row.key === 'minimap') btnMinimap = b;
+    if (row.key === 'moveTab') btnMoveToTab = b;
     b.addEventListener('click', function(ev) {
       ev.preventDefault();
       ev.stopPropagation();
@@ -453,7 +471,6 @@ function code(block) {
       updateToolbarState();
     });
   }
-  console.log('%c[Floating toolbar] Ready (horizontal, draggable).', 'color:#0284B1;font-weight:bold;');
 })();
 `;
 }

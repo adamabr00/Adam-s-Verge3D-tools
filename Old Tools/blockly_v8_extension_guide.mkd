@@ -1,0 +1,192 @@
+
+# Extending Blockly v8.0.1 in Verge3D with Custom UI and Plugins
+
+This document outlines how to extend the Blockly v8.0.1 workspace bundled with Verge3D, to implement custom editor interactions such as:
+
+- Shift+A “Add” menu (like Blender’s node editor)
+- Keyboard shortcuts (`G` = grab, `X` = delete, `Shift+D` = duplicate)
+- Quick favorites menu
+- Multi-block selection and dragging
+- Combining selected blocks into math or logic blocks
+
+The focus is on injecting JavaScript externally (e.g., via Verge3D’s plugin system) without modifying Blockly’s core source.
+
+## 📌 Understanding Blockly Architecture (v8.0.1)
+
+- Blockly is initialized via:  
+  ```js
+  const workspace = Blockly.inject('blocklyDiv', { /* config */ });
+  ```
+- This creates a `WorkspaceSvg` instance. Blocks inside it are `BlockSvg` instances.
+- Use `workspace.newBlock(type)` to create new blocks:
+  ```js
+  const block = workspace.newBlock('math_number');
+  block.setFieldValue('42', 'NUM');
+  block.initSvg();    // Required to display
+  workspace.render(); // Finalize layout
+  ```
+
+### Connecting Blocks
+Use connection APIs:
+```js
+blockA.outputConnection.connect(blockB.inputList[0].connection);
+```
+
+## ⌨️ Adding Custom Keyboard Shortcuts
+
+Blockly v8 handles its own key events globally. To prevent interference:
+
+```js
+workspace.getInjectionDiv().addEventListener('keydown', e => {
+  if (e.key === 'g') {
+    e.stopPropagation();
+    // Custom behavior here
+  }
+});
+```
+
+**Best Practice:** Use `stopPropagation()` to prevent conflict with Blockly’s internal handler.
+
+## 🧱 Creating a Shift+A “Add Menu”
+
+You can hook into `keydown` events to detect Shift+A and open a custom popup:
+
+```js
+workspace.getInjectionDiv().addEventListener('keydown', (e) => {
+  if (e.shiftKey && e.key === 'A') {
+    e.preventDefault();
+    openCustomAddMenu(); // Show a UI element at mouse position
+  }
+});
+```
+
+To spawn a block:
+```js
+const block = workspace.newBlock('math_number');
+block.initSvg();
+workspace.render();
+block.moveBy(x, y);
+```
+
+## 🧩 Context Menus and Favorites
+
+You can extend the context menu with `configureContextMenu`:
+```js
+workspace.configureContextMenu = (menuOptions, e) => {
+  menuOptions.push({
+    text: 'Add Favorite Block',
+    enabled: true,
+    callback: () => {
+      const block = workspace.newBlock('text_print');
+      block.initSvg();
+      workspace.render();
+      block.moveBy(e.clientX, e.clientY);
+    }
+  });
+};
+```
+
+Alternatively, use `Blockly.ContextMenuRegistry.registry.register(...)` for reusable actions.
+
+## 🔁 Multi-Block Selection and Dragging
+
+### Using `plugin-workspace-multiselect`
+
+Google’s official multiselect plugin enables multi-selection via SHIFT-click and drag.
+
+### ⚠️ Blockly 8 Compatibility
+
+Blockly 8.0.1 does **not support modern plugin imports**, so follow these steps:
+
+1. Clone the plugin source:  
+   [plugin-workspace-multiselect (GitHub)](https://github.com/google/blockly-samples/tree/master/plugins/workspace-multiselect)
+
+2. **Strip `import`/`export`** and wrap the plugin in an IIFE or expose globally:
+   ```js
+   window.BlocklyMultiselect = function(workspace) {
+     // plugin logic here
+   };
+   ```
+
+3. Load it in Verge3D via:
+   - A `<script>` tag, or
+   - Verge3D Plugin system (preferred, see below)
+
+4. Initialize it:
+   ```js
+   const workspace = Blockly.getMainWorkspace();
+   BlocklyMultiselect(workspace);
+   ```
+
+## 📦 Verge3D Plugin Integration
+
+Verge3D supports its own plugin system for extending the Puzzles editor.
+
+### 📁 Folder Structure
+
+```bash
+verge3d/
+└── puzzles/
+    └── plugins/
+        └── my-plugin/
+            ├── plugin.js
+            ├── plugin.xml        # Optional
+            └── icon.svg          # Optional
+```
+
+### 📜 `plugin.js` Example
+
+```js
+(function() {
+  const workspace = Blockly.getMainWorkspace();
+  workspace.getInjectionDiv().addEventListener('keydown', (e) => {
+    if (e.shiftKey && e.key === 'D') {
+      e.preventDefault();
+      const blocks = workspace.getAllSelected();
+      blocks.forEach(block => {
+        const xml = Blockly.Xml.blockToDom(block);
+        const clone = Blockly.Xml.domToBlock(xml, workspace);
+        clone.moveBy(30, 30);
+      });
+    }
+  });
+})();
+```
+
+### 💡 Tips
+
+- Use `Blockly.getMainWorkspace()` to access the main editor.
+- Don’t overwrite Blockly’s core functions—extend behavior with events or registries.
+- Use plugins to persist changes across all projects.
+
+## 🧠 Combining Blocks (e.g., into Math Block)
+
+To combine selected number blocks into a `math_arithmetic` block:
+
+1. Get selected blocks (requires multiselect plugin):
+   ```js
+   const selected = workspace.getAllSelected().filter(b => b.type === 'math_number');
+   ```
+
+2. Create new math block:
+   ```js
+   const math = workspace.newBlock('math_arithmetic');
+   math.initSvg();
+   ```
+
+3. Connect outputs of selected blocks:
+   ```js
+   selected[0].outputConnection.connect(math.getInput('A').connection);
+   selected[1].outputConnection.connect(math.getInput('B').connection);
+   ```
+
+4. Delete originals if desired.
+
+## 🧪 Final Notes
+
+- Blockly v8 is **pre-modular**, so all plugins must use global `Blockly` object access.
+- Some Blockly Samples (like `workspace-minimap`) may require heavy modification to work in v8.
+- Use Verge3D’s plugin folder for long-term persistence.
+- For drag behaviors and visual UI (menus), you may need to write your own HTML overlays positioned with `Blockly.svgResize()` for alignment.
+
+---
