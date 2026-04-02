@@ -1,4 +1,4 @@
-<template color="#090975" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Shift+A: block search. New variable name: Shift+Enter get, Alt+Shift+Enter set; Ctrl+Enter procedure, Ctrl+Alt+Enter procedure with return. Existing variable from list: Alt for set. Layout align/spacing: Enable Multi-Selection (Shift+Q / Shift+E).">
+<template color="#4a4463" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Shift+A: block search. New variable name: Shift+Enter get, Alt+Shift+Enter set; Ctrl+Enter procedure, Ctrl+Alt+Enter procedure with return. Existing variable from list: Alt for set. Layout align/spacing: Enable Multi-Selection (Shift+Q / Shift+E).">
     <dummy>
         <label>Add Menu (Shift+A)</label>
     </dummy>

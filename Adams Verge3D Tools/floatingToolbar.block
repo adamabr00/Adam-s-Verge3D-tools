@@ -1,4 +1,4 @@
-<template color="#0284B1" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Optional draggable horizontal icon bar: Add block (Shift+A), Local view (Shift+H), Math (Shift+C), Minimap, Improved search (Shift+F), Move to tab (Shift+T), layout Align / Space. Drag the grip to move; position is remembered per app URL via the browser (localStorage), not inside the .blend / puzzle file. Requires ?logic. Chain after other Adam puzzles in Master.">
+<template color="#455c80" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Optional draggable horizontal icon bar: Add block (Shift+A), Local view (Shift+H), Math (Shift+C), Minimap, Improved search (Shift+F), Move to tab (Shift+T), layout Align / Space. Drag the grip to move; position is remembered per app URL via the browser (localStorage), not inside the .blend / puzzle file. Requires ?logic. Chain after other Adam puzzles in Master.">
     <dummy>
         <label>Floating toolbar</label>
     </dummy>
@@ -115,6 +115,11 @@ function code(block) {
 
   function setMinimapIcon(btn, state) {
     if (!btn) return;
+    // Avoid rewriting svg.innerHTML when unchanged: the 200ms poll was replacing
+    // the SVG on every tick and nuking the hit target between mousedown/mouseup,
+    // so clicks often failed to fire (especially on the minimap button).
+    if (btn.dataset.adamMinimapIconState === state) return;
+    btn.dataset.adamMinimapIconState = state;
     var svg = btn.querySelector('svg');
     if (!svg) return;
     var inner = state === 'visible' ? MINIMAP_SVG_VISIBLE : MINIMAP_SVG_HIDDEN;

@@ -1,4 +1,4 @@
-<template color="#020024" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts to the Puzzles editor: X for delete, Shift+D for duplicate (multiple top-level stacks when Enable Multi-Selection is on), M for disable/enable, C for collapse/expand blocks.">
+<template color="#12121e" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts to the Puzzles editor: X for delete, Shift+D for duplicate (multiple top-level stacks when Enable Multi-Selection is on), M for disable/enable, C for collapse/expand blocks.">
     <dummy>
         <label>Keyboard Shortcuts (X, Shift+D, M, C)</label>
     </dummy>

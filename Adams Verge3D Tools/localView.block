@@ -1,4 +1,4 @@
-<template color="#05519A" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+H to toggle local view - shows only the selected block and its connections. Press Shift+H again to show all blocks.">
+<template color="#425275" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+H to toggle local view — shows the current selection and any blocks connected to it. With Multi-Select enabled, every selected block is a root (union of their connection graphs). Shift+H again shows all blocks.">
     <dummy>
         <label>Local View (Shift+H)</label>
     </dummy>
@@ -110,26 +110,53 @@ function code(block) {
     return visited;
   }
 
-  function getSelectedBlock() {
-    // In Blockly 8.0.1, use Blockly.selected to get the currently selected block
-    if (Blockly && Blockly.selected) {
-      return Blockly.selected;
+  /**
+   * Blocks to use as roots for the visible graph: multi-selection (if any) else Blockly.selected.
+   * Matches other tools that read window.__multiSelectedBlocks when multi-select is on.
+   */
+  function getSeedBlocksForLocalView(workspace) {
+    const out = [];
+    const seen = new Set();
+    const useMulti =
+      typeof window !== 'undefined' &&
+      window.__multiSelectEnabled &&
+      Array.isArray(window.__multiSelectedBlocks) &&
+      window.__multiSelectedBlocks.length > 0;
+    if (useMulti) {
+      const multi = window.__multiSelectedBlocks;
+      for (let i = 0; i < multi.length; i++) {
+        const b = multi[i];
+        if (!b || !b.id || seen.has(b.id)) continue;
+        if (workspace && b.workspace !== workspace) continue;
+        seen.add(b.id);
+        out.push(b);
+      }
+      if (out.length > 0) return out;
     }
-    return null;
+    if (Blockly && Blockly.selected) {
+      const b = Blockly.selected;
+      if (!b) return [];
+      if (workspace && b.workspace !== workspace) return [];
+      return [b];
+    }
+    return [];
   }
 
   function enableLocalView() {
     const workspace = getCurrentWorkspace();
     if (!workspace) return;
 
-    const selectedBlock = getSelectedBlock();
-    if (!selectedBlock) {
+    const seeds = getSeedBlocksForLocalView(workspace);
+    if (!seeds.length) {
       console.log('[Local View] No block selected.');
       return;
     }
 
-    // Get all blocks that should be visible (selected + connected)
-    const visibleBlockIds = getAllConnectedBlocks(selectedBlock, new Set());
+    // Union of connected graphs for every seed (multi-select → multiple roots)
+    const visibleBlockIds = new Set();
+    for (let s = 0; s < seeds.length; s++) {
+      getAllConnectedBlocks(seeds[s], visibleBlockIds);
+    }
     
     // Get all blocks in the workspace
     const allBlocks = workspace.getAllBlocks(false);
@@ -158,7 +185,13 @@ function code(block) {
 
     isLocalViewActive = true;
     showIndicator();
-    console.log('[Local View] Enabled. Showing', visibleBlockIds.size, 'blocks.');
+    console.log(
+      '[Local View] Enabled.',
+      visibleBlockIds.size,
+      'blocks from',
+      seeds.length,
+      'seed(s).'
+    );
   }
 
   function getParentBlock(block) {

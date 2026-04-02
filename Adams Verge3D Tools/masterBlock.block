@@ -1,4 +1,4 @@
-<template color="#009DBD" prev="true" next="true"
+<template color="#5a6d8d" prev="true" next="true"
   tooltip="Master block that loads all Adam's Awesome Tools features at once.">
   <dummy><label>Adam's Awesome Tools - Master</label></dummy>
   <statement name="DO"></statement>

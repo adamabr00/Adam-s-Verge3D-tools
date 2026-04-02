@@ -1,4 +1,4 @@
-<template color="#047857" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Shift+T: move selection to another tab — procedure defs use copy→relink→delete→rename. Requires ?logic; chain procedureRetargetLoader before this in Master.">
+<template color="#4b6185" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Shift+T: move selection to another tab — procedure defs use copy→relink→delete→rename. Requires ?logic; chain procedureRetargetLoader before this in Master.">
     <dummy>
         <label>Move blocks to tab</label>
     </dummy>
