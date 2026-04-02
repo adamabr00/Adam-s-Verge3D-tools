@@ -1,4 +1,4 @@
-<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+A to add search and add blocks to the workspace!">
+<template color="#090975" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Shift+A: block search. New variable name: Shift+Enter get, Alt+Shift+Enter set; Ctrl+Enter procedure, Ctrl+Alt+Enter procedure with return. Existing variable from list: Alt for set. Layout align/spacing: Enable Multi-Selection (Shift+Q / Shift+E).">
     <dummy>
         <label>Add Menu (Shift+A)</label>
     </dummy>
@@ -32,6 +32,77 @@ const favoriteBlocks = [
 function shouldRunMultiSelection() {
   const params = new URLSearchParams(window.location.search);
   return params.has('logic');
+}
+
+function adamTypingActive() {
+  const el = document.activeElement;
+  if (typeof window.__adamIsTypingTarget === 'function') {
+    return window.__adamIsTypingTarget(el);
+  }
+  return !!(el && (
+    el.tagName === 'INPUT' ||
+    el.tagName === 'TEXTAREA' ||
+    el.contentEditable === 'true' ||
+    el.isContentEditable
+  ));
+}
+
+function getAdamGlassPanelCss() {
+  if (window.__adamGlassStyles && window.__adamGlassStyles.panelShell) {
+    return window.__adamGlassStyles.panelShell;
+  }
+  return (
+    'background: linear-gradient(180deg, #101827bf, #0b1324cc);' +
+    'border: 1px solid #ffffff22;' +
+    'box-shadow: 0 20px 40px rgba(2, 6, 23, .45);' +
+    'backdrop-filter: blur(10px) saturate(120%);'
+  );
+}
+
+function getAdamGlassInputCss() {
+  if (window.__adamGlassStyles && window.__adamGlassStyles.inputField) {
+    return window.__adamGlassStyles.inputField;
+  }
+  return (
+    'background: linear-gradient(180deg, #0c1322, #0a111e);' +
+    'border: 1px solid #ffffff1a;' +
+    'border-radius: 14px;'
+  );
+}
+
+/** Shared glass shell for favorites + block search popups (cursor or centered). */
+function buildAddMenuPopupShellCss(centerOnScreen, extraCss) {
+  const pos = centerOnScreen
+    ? 'left: 50%; top: 50%; transform: translate(-50%, -50%);'
+    : 'top: ' + (lastMouseY + 10) + 'px; left: ' + lastMouseX + 'px; transform: translateX(-50%);';
+  return (
+    'position: fixed;' +
+    pos +
+    'width: min(560px, 92vw);' +
+    'padding: 28px;' +
+    'border-radius: 18px;' +
+    getAdamGlassPanelCss() +
+    'z-index: 10000;' +
+    (extraCss || '') +
+    'display: flex;' +
+    'flex-direction: column;'
+  );
+}
+
+async function ensureBlockSearchInfrastructure() {
+  if (!shouldRunMultiSelection()) {
+    return false;
+  }
+  if (!blockDatabase) {
+    loadBlockDatabase();
+  }
+  if (toolboxBlockCache.size === 0) {
+    preloadToolboxCache();
+  }
+  if (!blockFuse) {
+    await initializeFuseSearch();
+  }
+  return true;
 }
 
 // Helper function to get all block types
@@ -188,6 +259,23 @@ function createBlockAtCursor(type, variableId = null) {
   } catch (err) {
     console.warn('Failed to create block ' + type + ':', err);
     return null;
+  }
+}
+
+function insertVariableBlockAtCursor(variableId, asSet) {
+  const type = asSet ? 'variables_set' : 'variables_get';
+  return createBlockAtCursor(type, variableId);
+}
+
+function createVariableAndInsertBlock(name, asSet) {
+  const workspace = Blockly.getMainWorkspace();
+  if (!workspace) return null;
+  try {
+    const newVariable = workspace.createVariable(name);
+    return insertVariableBlockAtCursor(newVariable.getId(), asSet);
+  } catch (error) {
+    console.warn('Failed to create variable:', error);
+    return insertVariableBlockAtCursor(null, asSet);
   }
 }
 
@@ -578,25 +666,9 @@ function searchProceduresFallback(procedures, searchTerm) {
 
 // Create and show favorites popup
 async function showFavoritesPopup() {
-  // Check if we should run this functionality
-  if (!shouldRunMultiSelection()) {
+  if (!(await ensureBlockSearchInfrastructure())) {
     console.log('Favorites popup disabled - logic parameter not found in URL');
     return;
-  }
-  
-  // Load database if not already loaded
-  if (!blockDatabase) {
-    loadBlockDatabase();
-  }
-  
-  // Preload toolbox cache for better performance
-  if (toolboxBlockCache.size === 0) {
-    preloadToolboxCache();
-  }
-  
-  // Initialize Fuse.js if not already done
-  if (!blockFuse) {
-    await initializeFuseSearch();
   }
 
   // Remove existing popup if any
@@ -605,21 +677,7 @@ async function showFavoritesPopup() {
 
   const popup = document.createElement('div');
   popup.id = 'favorites-popup';
-  popup.style.cssText = 
-    'position: fixed;' +
-    'top: ' + (lastMouseY + 10) + 'px;' +
-    'left: ' + lastMouseX + 'px;' +
-    'transform: translateX(-50%);' +
-    'width: min(560px, 92vw);' +
-    'padding: 28px;' +
-    'border-radius: 18px;' +
-    'background: linear-gradient(180deg, #101827bf, #0b1324cc);' +
-    'border: 1px solid #ffffff22;' +
-    'box-shadow: 0 20px 40px rgba(2, 6, 23, .45);' +
-    'backdrop-filter: blur(10px) saturate(120%);' +
-    'z-index: 10000;' +
-    'display: flex;' +
-    'flex-direction: column;';
+  popup.style.cssText = buildAddMenuPopupShellCss(false, '');
 
   // Favorites section
   const favoritesContainer = document.createElement('div');
@@ -812,26 +870,14 @@ async function showFavoritesPopup() {
 }
 
 // Create and show search popup
-async function showSearchPopup() {
-  // Check if we should run this functionality
-  if (!shouldRunMultiSelection()) {
+// options.center: true → viewport center (e.g. floating toolbar); omit/false → near cursor (Shift+A)
+async function showSearchPopup(options) {
+  options = options || {};
+  const centerOnScreen = options.center === true;
+
+  if (!(await ensureBlockSearchInfrastructure())) {
     console.log('Search popup disabled - logic parameter not found in URL');
     return;
-  }
-  
-  // Load database if not already loaded
-  if (!blockDatabase) {
-    loadBlockDatabase();
-  }
-  
-  // Preload toolbox cache for better performance
-  if (toolboxBlockCache.size === 0) {
-    preloadToolboxCache();
-  }
-  
-  // Initialize Fuse.js if not already done
-  if (!blockFuse) {
-    await initializeFuseSearch();
   }
 
   // Remove existing popup if any
@@ -840,22 +886,7 @@ async function showSearchPopup() {
 
   const popup = document.createElement('div');
   popup.id = 'block-search-popup';
-  popup.style.cssText = 
-    'position: fixed;' +
-    'top: ' + (lastMouseY + 10) + 'px;' +
-    'left: ' + lastMouseX + 'px;' +
-    'transform: translateX(-50%);' +
-    'width: min(560px, 92vw);' +
-    'padding: 28px;' +
-    'border-radius: 18px;' +
-    'background: linear-gradient(180deg, #101827bf, #0b1324cc);' +
-    'border: 1px solid #ffffff22;' +
-    'box-shadow: 0 20px 40px rgba(2, 6, 23, .45);' +
-    'backdrop-filter: blur(10px) saturate(120%);' +
-    'z-index: 10000;' +
-    'max-height: 500px;' +
-    'display: flex;' +
-    'flex-direction: column;';
+  popup.style.cssText = buildAddMenuPopupShellCss(centerOnScreen, 'max-height: 500px;');
 
   // Add title above search field
   const searchTitle = document.createElement('div');
@@ -875,10 +906,8 @@ async function showSearchPopup() {
   searchInput.type = 'text';
   searchInput.placeholder = 'Search for blocks...';
   searchInput.style.cssText = 
-    'background: linear-gradient(180deg, #0c1322, #0a111e);' +
+    getAdamGlassInputCss() +
     'color: #e6f0ff;' +
-    'border: 1px solid #ffffff1a;' +
-    'border-radius: 14px;' +
     'padding: 14px;' +
     'font-size: 16px;' +
     'font-weight: 500;' +
@@ -1171,22 +1200,12 @@ async function showSearchPopup() {
            button.style.transform = 'translateY(0px)';
          });
          
-         button.addEventListener('click', () => {
+         button.addEventListener('click', (ev) => {
+           const asSet = ev.altKey;
            if (isCreateOption) {
-             // Create a new variable and then create the block
-             const workspace = Blockly.getMainWorkspace();
-             if (workspace) {
-               try {
-                 const newVariable = workspace.createVariable(variable.originalName);
-                 createBlockAtCursor('variables_get', newVariable.getId());
-               } catch (error) {
-                 console.warn('Failed to create variable:', error);
-                 // Fallback: try to create the block anyway
-                 createBlockAtCursor('variables_get');
-               }
-             }
+             createVariableAndInsertBlock(variable.originalName, asSet);
            } else {
-             createBlockAtCursor('variables_get', variable.id);
+             insertVariableBlockAtCursor(variable.id, asSet);
            }
            popup.remove();
          });
@@ -1313,7 +1332,7 @@ async function showSearchPopup() {
               
               // Keyboard shortcut hint
               const shortcutHint = document.createElement('span');
-              shortcutHint.textContent = '(Shift+Enter)';
+              shortcutHint.textContent = '(Shift+Enter get · Alt+Shift+Enter set · Alt+click set)';
               shortcutHint.style.cssText = 
                 'font-size: 11px;' +
                 'opacity: 0.6;' +
@@ -1341,17 +1360,9 @@ async function showSearchPopup() {
                createVarButton.style.transform = 'translateY(0px)';
              });
              
-             createVarButton.addEventListener('click', () => {
-               const workspace = Blockly.getMainWorkspace();
-               if (workspace) {
-                 try {
-                   const newVariable = workspace.createVariable(originalSearchTerm);
-                   createBlockAtCursor('variables_get', newVariable.getId());
-                 } catch (error) {
-                   console.warn('Failed to create variable:', error);
-                   createBlockAtCursor('variables_get');
-                 }
-               }
+             createVarButton.addEventListener('click', (ev) => {
+               const asSet = ev.altKey;
+               createVariableAndInsertBlock(originalSearchTerm, asSet);
                popup.remove();
              });
              
@@ -1385,7 +1396,7 @@ async function showSearchPopup() {
               
               // Keyboard shortcut hint
               const shortcutHint = document.createElement('span');
-              shortcutHint.textContent = '(Ctrl+Enter)';
+              shortcutHint.textContent = '(Ctrl+Enter · Ctrl+Alt+Enter return)';
               shortcutHint.style.cssText = 
                 'font-size: 11px;' +
                 'opacity: 0.6;' +
@@ -1413,9 +1424,9 @@ async function showSearchPopup() {
                createProcButton.style.transform = 'translateY(0px)';
              });
              
-             createProcButton.addEventListener('click', () => {
-               // Create a procedure definition block
-               const block = createBlockAtCursor('procedures_defnoreturn');
+             createProcButton.addEventListener('click', (ev) => {
+               const blockType = ev.altKey ? 'procedures_defreturn' : 'procedures_defnoreturn';
+               const block = createBlockAtCursor(blockType);
                if (block) {
                  block.setFieldValue(originalSearchTerm, 'NAME');
                }
@@ -1469,7 +1480,7 @@ async function showSearchPopup() {
      if (e.key === 'Enter') {
        e.preventDefault();
        
-       // Check for Shift+Enter (create variable) or Ctrl+Enter (create procedure)
+       // Ctrl+Alt+Enter: procedure return · Alt+Shift+Enter: set · Shift+Enter: get · Ctrl+Enter: procedure
        const searchTerm = searchInput.value.trim();
        if (searchTerm.length > 0 && searchTerm.length <= 50) {
          const isValidName = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(searchTerm);
@@ -1484,24 +1495,28 @@ async function showSearchPopup() {
              p.name.toLowerCase() === searchTerm.toLowerCase()
            );
            
-           if (e.shiftKey && !existingVariable) {
-             // Shift+Enter: Create variable
-             const workspace = Blockly.getMainWorkspace();
-             if (workspace) {
-               try {
-                 const newVariable = workspace.createVariable(searchTerm);
-                 createBlockAtCursor('variables_get', newVariable.getId());
-               } catch (error) {
-                 console.warn('Failed to create variable:', error);
-                 createBlockAtCursor('variables_get');
-               }
+           if (e.ctrlKey && e.altKey && !existingProcedure) {
+             const block = createBlockAtCursor('procedures_defreturn');
+             if (block) {
+               block.setFieldValue(searchTerm, 'NAME');
              }
              popup.remove();
              return;
            }
+
+           if (e.altKey && e.shiftKey && !e.ctrlKey && !existingVariable) {
+             createVariableAndInsertBlock(searchTerm, true);
+             popup.remove();
+             return;
+           }
            
-           if (e.ctrlKey && !existingProcedure) {
-             // Ctrl+Enter: Create procedure
+           if (e.shiftKey && !e.ctrlKey && !e.altKey && !existingVariable) {
+             createVariableAndInsertBlock(searchTerm, false);
+             popup.remove();
+             return;
+           }
+           
+           if (e.ctrlKey && !e.shiftKey && !e.altKey && !existingProcedure) {
              const block = createBlockAtCursor('procedures_defnoreturn');
              if (block) {
                block.setFieldValue(searchTerm, 'NAME');
@@ -1521,23 +1536,13 @@ async function showSearchPopup() {
          if (isVariable) {
            const variableId = selectedButton.dataset.variableId;
            const isCreateOption = selectedButton.dataset.isCreateOption === 'true';
+           const asSet = isCreateOption ? (e.altKey && e.shiftKey) : e.altKey;
          
          if (isCreateOption) {
-           // Create a new variable and then create the block
-           const workspace = Blockly.getMainWorkspace();
-           if (workspace) {
-             try {
-               const originalName = selectedButton.dataset.originalName;
-               const newVariable = workspace.createVariable(originalName);
-               createBlockAtCursor('variables_get', newVariable.getId());
-             } catch (error) {
-               console.warn('Failed to create variable:', error);
-               // Fallback: try to create the block anyway
-               createBlockAtCursor('variables_get');
-             }
-           }
+           const originalName = selectedButton.dataset.originalName;
+           createVariableAndInsertBlock(originalName, asSet);
          } else {
-           createBlockAtCursor('variables_get', variableId);
+           insertVariableBlockAtCursor(variableId, asSet);
          }
        } else if (isProcedure) {
          const procedureName = selectedButton.dataset.procedureId; // This is actually the procedure name
@@ -1574,30 +1579,26 @@ async function showSearchPopup() {
   }, { once: true });
 }
 
-// Add keyboard shortcuts for Q (favorites) and Shift+A (search)
+window.__adamOpenAddMenu = function () {
+  const open = document.getElementById('block-search-popup');
+  if (open) {
+    open.remove();
+    return Promise.resolve();
+  }
+  return showSearchPopup({ center: true });
+};
+
+// Shift+A — toggle add block search (layout shortcuts live in multiSelect.block)
 document.addEventListener('keydown', function(e) {
-  // Check if we're currently typing in an input field, textarea, or contenteditable element
-  const activeElement = document.activeElement;
-  const isTyping = activeElement && (
-    activeElement.tagName === 'INPUT' ||
-    activeElement.tagName === 'TEXTAREA' ||
-    activeElement.contentEditable === 'true' ||
-    activeElement.isContentEditable
-  );
-  
-  // Only trigger if we're not typing
-  if (!isTyping) {
-    // Q key for favorites popup
-    if (e.key === 'Q' || e.key === 'q') {
-      e.preventDefault();
-      showFavoritesPopup().catch(err => {
-        console.warn('Failed to show favorites popup:', err);
-      });
-    }
-    
-    // Shift+A for search popup
+  if (!adamTypingActive()) {
+    // Shift+A — toggle add block search (same as floating toolbar)
     if (e.shiftKey && e.key === 'A') {
       e.preventDefault();
+      const open = document.getElementById('block-search-popup');
+      if (open) {
+        open.remove();
+        return;
+      }
       showSearchPopup().catch(err => {
         console.warn('Failed to show search popup:', err);
       });

@@ -1,4 +1,4 @@
-<template color="#04033F" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+F to open enhanced search with tab navigation. Find blocks across all tabs with keyboard shortcuts.">
+<template color="#de3900" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press Shift+F to open enhanced search with tab navigation. Find blocks across all tabs with keyboard shortcuts.">
     <dummy>
         <label>Improved Search (Shift+F)</label>
     </dummy>
@@ -681,15 +681,9 @@ function code(block) {
         }
 
         function toggleSearchUI(initialQuery = "") {
-            if (searchOverlay) {
-                closeSearchUI();
-                return;
-            }
-            refreshBlockCache();
+            refreshBlockCache(); 
             createSearchUI(initialQuery);
         }
-
-        window.__adamToggleImprovedSearch = toggleSearchUI;
 
         // 🔹 Debug helper
         window.inspectSelectedBlockCache = function() {
@@ -706,9 +700,10 @@ function code(block) {
 
         // 🔹 Hotkeys
         document.addEventListener('keydown', e => {
-            const isTyping = typeof window.__adamIsTypingTarget === 'function'
-                ? window.__adamIsTypingTarget(document.activeElement)
-                : !!(document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA'));
+            // ✅ Only toggle if focus is NOT inside an input/textarea
+            const isTyping = document.activeElement && 
+                            (document.activeElement.tagName === 'INPUT' || 
+                            document.activeElement.tagName === 'TEXTAREA');
 
             if (!isTyping && e.shiftKey && e.key.toLowerCase() === 'f') {
                 toggleSearchUI(Blockly.selected ? getCleanBlockQuery(Blockly.selected) : "");

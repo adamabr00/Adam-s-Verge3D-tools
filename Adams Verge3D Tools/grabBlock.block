@@ -1,4 +1,4 @@
-<template color="#3b82f6" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press G to grab and drag the selected block. Click to drop, right-click to cancel and restore connections.">
+<template color="#081F83" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Press G to grab and drag the selected block. Click to drop, right-click to cancel and restore connections.">
   <dummy>
     <label>G-Drag Selected Block</label>
   </dummy>
@@ -172,9 +172,25 @@ function code(block) {
     connSnap = snapshotConnections(block);
 
     fire('pointerdown', svg, { buttons: 1 });
+    // Blockly clears blocklySelected on drag start; restore so single-block G matches multi-drag visuals
+    try {
+      if (block && typeof block.addSelect === 'function') block.addSelect();
+    } catch (e) {}
+    try {
+      requestAnimationFrame(function () {
+        try {
+          if (block && typeof block.addSelect === 'function') block.addSelect();
+        } catch (e) {}
+      });
+    } catch (e) {}
     dragging = true;
 
-    moveProxy = () => fire('pointermove', document, { buttons: 1 });
+    moveProxy = function () {
+      fire('pointermove', document, { buttons: 1 });
+      try {
+        if (block && typeof block.addSelect === 'function') block.addSelect();
+      } catch (e) {}
+    };
     document.addEventListener('mousemove', moveProxy, true);
 
     overlay = makeOverlay();
@@ -231,7 +247,9 @@ function code(block) {
   document.addEventListener('keydown', e => {
     if (e.key && e.key.toLowerCase() === 'g' && !dragging) {
       const t = e.target;
-      const isTyping = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      const isTyping = typeof window.__adamIsTypingTarget === 'function'
+        ? window.__adamIsTypingTarget(t)
+        : !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
       if (isTyping) return;
       
       // Check if multi-selection is active - let multiSelect handle it
