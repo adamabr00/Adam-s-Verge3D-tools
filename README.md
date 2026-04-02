@@ -92,7 +92,7 @@ Adds **multi-selection** on top of Blockly’s single selection: select several 
 
 
 
-![MultiSelect](https://github.com/user-attachments/assets/PLACEHOLDER_MULTI_SELECT_GIF)
+![MultiSelect](https://github.com/adamabr00/Adam-s-Verge3D-tools/blob/main/Gifs/Multi-selection.gif?raw=true)
 
 
 
