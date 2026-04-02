@@ -1,6 +1,8 @@
 # Adam's Awesome Tools - Verge3D Puzzle Editor Plugins
 
-A collection of powerful plugins that enhance the Verge3D puzzle editor with advanced functionality, keyboard shortcuts, and improved workflow tools.
+A collection of powerful plugins that enhance the Verge3D puzzle editor with advanced functionality, keyboard shortcuts, and improved workflow tools. The suite includes **multi-selection**, **layout alignment**, a **minimap**, **cross-tab search**, optional **floating toolbar**, and shared editor helpers loaded from `init.plug`.
+
+Use the **Master** puzzle to chain every tool at once, or add individual blocks from the same plugin category. For a maintainer-oriented overview of how pieces fit together, see [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 ## Features
 
@@ -27,17 +29,17 @@ Adds convenient keyboard shortcuts for common puzzle operations, enhancing the u
 ![ShortCutPuzzles](https://github.com/user-attachments/assets/9b0871e3-3e48-46ed-abb9-1a769367bf29)
 
 **Key Features:**
-- **X key** - Deletes the selected puzzle (same action as Delete key)
-- **Shift+D** - Duplicates the selected puzzle
+- **X key** - Deletes the selected puzzle (same action as Delete key); with **Multi-Select**, deletes every selected block
+- **Shift+D** - Duplicates the selected puzzle; with **Multi-Select**, duplicates **multiple** top-level stacks in one action
 - **M key** - Toggles disable/enable state of the selected puzzle
 - **C key** - Toggles collapse/expand state of the selected puzzle
 
-**Usage:** Select any puzzle in the workspace, then press **X** to delete it, **Shift+D** to create a duplicate, or **M** to toggle the puzzle's enabled/disabled state.
+**Usage:** Select any puzzle in the workspace, then press **X** to delete it, **Shift+D** to create a duplicate, or **M** to toggle the puzzle's enabled/disabled state. Install the **Multi-Select** puzzle for bulk delete/duplicate behavior.
 
 ---
 
 ### Add Menu Plugin - Q & Shift+A
-Provides two powerful menu systems for quickly adding puzzles to the workspace using keyboard shortcuts.
+Provides two powerful menu systems for quickly adding puzzles to the workspace using keyboard shortcuts. The menus have been **refreshed** to work smoothly with the newer search, multi-select, and toolbar workflows.
 
 ![AddMenuV2](https://github.com/user-attachments/assets/98ea11a7-95f9-4a8d-9818-17e9c966e49a)
 
@@ -73,6 +75,11 @@ Provides an advanced search interface for finding puzzles across all tabs in the
 - **Cross-tab search** - Searches through all tabs simultaneously
 - **Tab-based navigation** - Results organized by tab with individual counters
 - **Smart text processing** - Searches puzzle types, field values, and mutation names
+- **Debounced search** - Reduces work while typing for smoother performance on large projects
+- **Collapsed blocks** - Matches inside collapsed stacks are found and surfaced when navigating results
+- **Stronger highlighting** - Glow-style emphasis on the active match in the workspace
+- **UI hints** - Inline guidance for shortcuts and navigation
+- **Predictable first open** - Does not auto-jump the viewport on the first open; you stay in control until you pick a result
 - **Real-time highlighting** - Automatically switches to relevant tab and highlights found puzzles
 - **Keyboard navigation:**
   - Arrow Up/Down: Navigate within current tab
@@ -100,6 +107,50 @@ Provides a focused view mode that shows only the selected puzzle block and its c
 
 ---
 
+### Multi-Select Plugin
+Adds **multi-selection** on top of Blockly’s single selection: select several blocks, run bulk actions, and use **layout preview** tools for alignment and spacing.
+
+**Key Features:**
+- **Shift+Click** - Add or remove blocks from the selection
+- **Shift+drag on empty workspace** - Marquee / drag selection (gesture integration with Blockly)
+- **Ctrl+B** - One-shot box selection overlay
+- **X** - Delete all selected blocks (with the Keyboard Shortcuts plugin)
+- **Shift+D** - Duplicate **multiple top-level stacks** at once when the Keyboard Shortcuts plugin is present
+- **G** - Multi-drag with connection preservation (works with the G-Drag plugin)
+- **Layout previews** - **Ctrl+Q** / **Shift+Q** for horizontal alignment preview, **Ctrl+E** / **Shift+E** for vertical spacing preview; mouse to preview, click to commit, **Esc** to cancel
+- **WASD** - Nudge during layout preview where supported
+
+**Usage:** Add **Enable Multi-Selection** to your master chain (after shortcuts/search/minimap/add menu is recommended). Use Shift+click and box select to build a selection, then delete, duplicate, or open layout previews. See the block tooltip in the editor for the full shortcut list.
+
+---
+
+### Minimap Plugin
+Adds a **draggable minimap** in the corner of the puzzle editor so you can see the whole workspace and your current viewport at a glance.
+
+**Key Features:**
+- **Resizable panel** - Drag the panel edge to resize; the map redraws to fill the new area
+- **Toolbar-matched styling** - Gray panel chrome consistent with the floating toolbar
+- **Click to jump** - Left-click centers the main workspace on that minimap location
+- **Drag to pan** - After clicking, hold and drag to pan; tracking uses window-level listeners so it keeps working if the pointer leaves the minimap
+- **Separate drag handle** - Move the whole panel by dragging the grip handle only (canvas stays for navigation)
+
+**Usage:** Add the **Add Minimap** puzzle to your chain. Drag the grip to reposition the panel. Resize the panel to change the map size. Click and drag on the map to move the workspace view.
+
+---
+
+### Floating Toolbar Plugin
+Optional **horizontal icon bar** for common actions (add menu, local view, math, minimap toggle, improved search, layout align/spacing). **Only runs in the Visual Logic editor when the page URL includes `?logic`.**
+
+**Key Features:**
+- **Quick actions** - Same shortcuts as the rest of the suite, exposed as icons
+- **Draggable** - Grab the left grip to move the bar
+- **Position remembered** - Stored per URL in **browser localStorage** (not inside your `.blend` or puzzle XML)
+- **Integrates with multi-select** - Layout actions align with multi-select previews where applicable
+
+**Usage:** Open the puzzle editor with **`?logic`** in the URL, add **Floating toolbar** after other Adam puzzles in the master chain, reload, and use the bar. If `?logic` is missing, the toolbar skips loading (see browser console).
+
+---
+
 ### G-Drag Puzzles Plugin
 Provides an simple block dragging interface with connection preservation and restoration.
 
@@ -116,5 +167,10 @@ Provides an simple block dragging interface with connection preservation and res
 
 ## 🛠️ Installation
 
-1. Copy the `.block` files to your Verge3D puzzle editor plugins directory
-2. Restart the puzzle editor
+1. Copy the **`Adams Verge3D Tools`** plugin folder (including **`init.plug`** and all **`.block`** files) into your Verge3D puzzle editor plugins directory.
+2. Restart the puzzle editor.
+3. In Visual Logic, add blocks from **Adam's Custom Tools** — use **Adam's Awesome Tools - Master** to run the full pre-wired chain, or add individual puzzles.
+
+**Optional:** `adamEditorCommon.js` mirrors small globals normally injected by `init.plug` (`?logic` detection, typing guard, shared panel styles). Include it only if you load puzzles without the standard `init.plug` bootstrap.
+
+**Floating toolbar:** Open the editor with **`?logic`** in the query string (e.g. your usual Visual Logic URL with `?logic` appended) so the floating toolbar and other logic-only features can initialize.
