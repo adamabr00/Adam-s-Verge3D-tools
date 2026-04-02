@@ -1,0 +1,11 @@
+<template color="#de3900">
+    <dummy>
+        <label>Add Adam's Awesomeness Tools</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `console.log('This is my first puzzle!');`;
+}
+</script>

@@ -8,14 +8,12 @@
 function code(block) {
     return `(function() {
   const params = new URLSearchParams(location.search);
-  if (!params.has('logic')) { 
-    console.log('[Local View] Skipped: no ?logic param.'); 
-    return; 
+  if (!params.has('logic')) {
+    return;
   }
-  
-  if (window.__LocalViewInstalled) { 
-    console.log('[Local View] Already installed.'); 
-    return; 
+
+  if (window.__LocalViewInstalled) {
+    return;
   }
   window.__LocalViewInstalled = true;
 
@@ -375,7 +373,6 @@ function code(block) {
       if (window.Blockly && getCurrentWorkspace()) {
         // Add keyboard listener
         document.addEventListener('keydown', handleKeyPress, true);
-        console.log('[Local View] Initialized. Press Shift+H to toggle local view.');
       } else {
         setTimeout(waitForBlockly, 100);
       }

@@ -1,6 +1,6 @@
 # Adam's Awesome Tools - Verge3D Puzzle Editor Plugins
 
-A collection of powerful plugins that enhance the Verge3D puzzle editor with advanced functionality, keyboard shortcuts, and improved workflow tools. The suite includes **multi-selection**, **layout alignment**, a **minimap**, **cross-tab search**, optional **floating toolbar**, and shared editor helpers loaded from `init.plug`.
+A collection of powerful plugins that enhance the Verge3D puzzle editor with advanced functionality, keyboard shortcuts, and improved workflow tools. The suite includes **multi-selection**, **layout alignment**, a **minimap**, **cross-tab search**, optional **floating toolbar**, **procedure caller retarget** (context menu), and shared editor helpers loaded from `init.plug`.
 
 Use the **Master** puzzle to chain every tool at once, or add individual blocks from the same plugin category. For a maintainer-oriented overview of how pieces fit together, see [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
@@ -52,17 +52,37 @@ Provides two powerful menu systems for quickly adding puzzles to the workspace u
 **Shift+A - Search Menu:**
 - Comprehensive search interface for all available puzzles
 - **Fuzzy search** using Fuse.js for intelligent matching
-- **Variable integration** - search and create variable get blocks
-- **Procedure integration** - search and create procedure call blocks
+- **Variable integration** - search existing variables or create new ones; insert a **getter** or **setter** block depending on modifiers (see below)
+- **Procedure integration** - search procedure calls, or **define** a new procedure with or without a return value (see below)
 - **Supports Shadow Defaults** - Brings in the default values found in the toolbox
 - **Smart suggestions** - offers to create new variables/procedures if they don't exist
-- **Keyboard shortcuts:**
-  - Shift+Enter: Create new variable
-  - Ctrl+Enter: Create new procedure
-  - Arrow keys: Navigate results
-  - Enter: Select highlighted item
+- **Keyboard shortcuts (navigation):**
+  - Arrow keys: Move through results
+  - Enter: Activate the highlighted row (combined with modifiers below when creating from the typed name)
 
-**Usage:** Press **Q** for quick access to favorite puzzles, or press **Shift+A** to search all available puzzles, variables, and procedures.
+**New variable name (typed in the search box — valid identifier, not already in use):**
+- **Shift+Enter** — Create the variable and insert a **get** block (read the value)
+- **Alt+Shift+Enter** — Create the variable and insert a **set** block (assign the value)
+- **“Create Variable …” button:** normal click = **get** · **Alt+click** = **set**
+
+**New variable row (you moved the highlight to “Create Variable …” in the results list):**
+- **Enter** — **get**
+- **Alt+Shift+Enter** — **set** (same pattern as the typed-name shortcuts above)
+
+**Existing variable (chosen from the list):**
+- **Enter** — Insert a **get** block
+- **Alt+Enter** — Insert a **set** block
+- **Click** a row — **get** · **Alt+click** — **set**
+
+**New procedure name (typed in the search box — valid identifier, not already in use):**
+- **Ctrl+Enter** — Create a **procedure without return** (definition block has no return socket)
+- **Ctrl+Alt+Enter** — Create a **procedure with return** (definition block includes a return value)
+
+**“Create Procedure …” button (same typed name):**
+- **Click** — New procedure **without** return
+- **Alt+click** — New procedure **with** return
+
+**Usage:** Press **Q** for quick access to favorite puzzles, or press **Shift+A** to search all available puzzles, variables, and procedures. Hold **Alt** when you want a **setter** instead of a **getter** for variables, or a **returning procedure** instead of a plain procedure when creating definitions from the menu.
 
 ---
 
@@ -121,6 +141,39 @@ Adds **multi-selection** on top of Blockly’s single selection: select several 
 - **WASD** - Nudge during layout preview where supported
 
 **Usage:** Add **Enable Multi-Selection** to your master chain (after shortcuts/search/minimap/add menu is recommended). Use Shift+click and box select to build a selection, then delete, duplicate, or open layout previews. See the block tooltip in the editor for the full shortcut list.
+
+---
+
+### Move to Tab Plugin - Shift+T
+Moves the current **multi-selection** (or Blockly’s primary selection when nothing is multi-selected) from the active tab to another tab by **cut + paste**, preserving each stack’s **XY** position.
+
+**Key Features:**
+- **Shift+T** - Opens a small picker: filter existing tabs, type a **new tab name** to create it, then **Move**
+- **Multi-select aware** - Moves unique **chain roots** only (same root logic as bulk duplicate/delete)
+- **Procedure-safe (best effort)** - Serialized blocks keep their **Blockly IDs**; destination proxies that would collide are removed before paste so definitions don’t duplicate
+- **Undo** - Move is performed inside Blockly event groups (`Blockly.Events.setGroup`) so **Undo** should reverse the paste/delete steps together where the editor allows
+
+**Usage:** Add **Move selection to tab** to your master chain (after **Enable Multi-Selection** is recommended). Select block(s), press **Shift+T**, pick or name the destination tab, confirm. Optional script API: `window.__adamMoveBlocksToTab('MyTab', { createIfMissing: true })`.
+
+**Manual checks:** Move one stack and several stacks to an existing tab; create a new tab via the dialog; move a procedure definition while callers stay in another tab; try **Undo** after a move.
+
+---
+
+### Procedure retarget (editor context menu)
+
+Adds a **right-click** action on **procedure caller** blocks (both “run procedure” and “run procedure with return”): **Retarget all callers of “…” to…**
+
+**Behavior:**
+
+- Prompts for the **target procedure name** (must already exist on every tab that still has callers of the old name).
+- Updates **all** caller blocks that used the old name, across **all** puzzle tabs (`Blockly.Workspace.getAll()`), in one undo group.
+- The target definition must **match caller type** (procedure with return vs without return). After retargeting, `Blockly.Procedures.mutateCallers` runs where applicable so arguments line up with the new definition when Blockly supports it.
+
+**Usage:** Add the **Procedure retarget (editor context menu)** puzzle to the **Master** chain (or place it once in the workspace). Open the Puzzles editor with **`?logic`**. Right-click a **caller** block → choose **Retarget all callers…** → enter the new procedure name.
+
+Implementation note: the menu entry is registered with Blockly’s **`ContextMenuRegistry`** (Blockly 9+), not by patching `Blockly.Blocks[…].customContextMenu`, so it appears for all procedure caller blocks including ones already on the workspace when the editor loaded.
+
+**Limitations:** Does not move procedure definitions; only repoints callers. If the target procedure does not exist on a tab that still has callers of the old name, validation fails with an alert.
 
 ---
 

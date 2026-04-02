@@ -1,0 +1,242 @@
+<template color="#3b82f6" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Automatically hide blocks outside the viewport to improve performance. Shows a visual border around the viewport area.">
+  <dummy>
+    <label>Cull Offscreen Blocks</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function() {
+  if (!new URLSearchParams(location.search).has('logic')) return;
+  if (window.__v3dPuzzleVirtualizer) return;
+
+  // ==== Config ==============================================================
+  let PAD_PX = 200;                 // padding in SCREEN px (converted to workspace via / scale)
+  const MIN_BLOCKS = 1;
+  const LOG_VERBOSE = false;        // true -> log shown/hidden each pass
+  const BORDER_COLOR = '#ff0077', BORDER_WIDTH = 2, BORDER_DASH = '6,4';
+  const POLL_MS = 500;              // how often to check for workspace/canvas swaps
+  // ==========================================================================
+
+  // ---- State ---------------------------------------------------------------
+  let currentWorkspace = null;
+  let currentSvg = null;
+  let currentCanvas = null;         // <g> that carries pan/zoom transform
+  let borderRect = null;
+  let raf = 0;
+  let uiListener = null;
+  let canvasObserver = null;
+
+  // ---- Helpers -------------------------------------------------------------
+  function findCanvas(svg){
+    return (
+      (svg && svg.querySelector('g.blocklyBlockCanvas')) ||
+      (svg && svg.querySelector('g.blocklyCanvas')) ||
+      (svg && svg.querySelector('g.blocklyWorkspace')) ||
+      null
+    );
+  }
+
+  function readCanvasMatrix() {
+    if (!currentCanvas) return null;
+    const baseVal = currentCanvas.transform && currentCanvas.transform.baseVal;
+    if (!baseVal || baseVal.numberOfItems === 0) return null;
+    const t = baseVal.consolidate();
+    return t ? t.matrix : null; // { a c e ; b d f ; 0 0 1 }
+  }
+
+  function getViewportWS() {
+    if (!currentSvg) return null;
+    const m = readCanvasMatrix();
+    if (!m) return null;
+
+    const scaleX = m.a || 1, scaleY = m.d || 1;
+    const transX = m.e || 0, transY = m.f || 0;
+
+    // visible size in screen pixels
+    const viewW_px = currentSvg.clientWidth;
+    const viewH_px = currentSvg.clientHeight;
+
+    // convert to workspace units (inverse transform)
+    const left_ws   = -transX / scaleX;
+    const top_ws    = -transY / scaleY;
+    const width_ws  = viewW_px / scaleX;
+    const height_ws = viewH_px / scaleY;
+
+    // padding in workspace units
+    const padX_ws = PAD_PX / scaleX;
+    const padY_ws = PAD_PX / scaleY;
+
+    return {
+      left:   left_ws  - padX_ws,
+      top:    top_ws   - padY_ws,
+      right:  left_ws  + width_ws  + padX_ws,
+      bottom: top_ws   + height_ws + padY_ws,
+      scaleX, scaleY
+    };
+  }
+
+  function ensureBorderRect() {
+    if (!currentCanvas) return null;
+    let r = currentCanvas.querySelector('#__v3dViewportBorder__');
+    if (!r) {
+      r = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      r.id = '__v3dViewportBorder__';
+      r.setAttribute('fill', 'none');
+      r.setAttribute('stroke', BORDER_COLOR);
+      r.setAttribute('stroke-width', String(BORDER_WIDTH));
+      r.setAttribute('stroke-dasharray', BORDER_DASH);
+      r.setAttribute('vector-effect', 'non-scaling-stroke');
+      r.style.pointerEvents = 'none';
+      currentCanvas.appendChild(r);
+    }
+    return r;
+  }
+
+  function updateBorder(viewWS) {
+    if (!borderRect) borderRect = ensureBorderRect();
+    if (!borderRect) return;
+    const x = viewWS.left;
+    const y = viewWS.top;
+    const w = Math.max(0, viewWS.right - viewWS.left);
+    const h = Math.max(0, viewWS.bottom - viewWS.top);
+    borderRect.setAttribute('x', String(x));
+    borderRect.setAttribute('y', String(y));
+    borderRect.setAttribute('width',  String(w));
+    borderRect.setAttribute('height', String(h));
+  }
+
+  function getBlockRectWS(b) {
+    if (typeof b.getBoundingRectangle === 'function') {
+      const r = b.getBoundingRectangle();
+      if (r) return {left:r.left, top:r.top, right:r.right, bottom:r.bottom};
+    }
+    const xy = b.getRelativeToSurfaceXY ? b.getRelativeToSurfaceXY() : {x:0, y:0};
+    const hw = b.getHeightWidth ? b.getHeightWidth() : {width:0, height:0};
+    return {left: xy.x, top: xy.y, right: xy.x + hw.width, bottom: xy.y + hw.height};
+  }
+
+  function overlaps(a, b) {
+    return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
+  }
+
+  function setDrawn(block, drawn) {
+    const el = block.getSvgRoot && block.getSvgRoot();
+    if (!el) return;
+    if (block.__drawn === drawn) return;
+    block.__drawn = drawn;
+    el.style.display = drawn ? '' : 'none';
+  }
+
+  function cullUsing(viewWS) {
+    const ws = currentWorkspace;
+    const tops = ws && ws.getTopBlocks ? ws.getTopBlocks(false) : [];
+    if (!tops || tops.length < MIN_BLOCKS) return {shown:0, hidden:0};
+
+    let shown = 0, hidden = 0;
+    for (let i = 0; i < tops.length; i++) {
+      const b = tops[i];
+      if (b.dragged) { setDrawn(b, true); shown++; continue; }
+      const r = getBlockRectWS(b);
+      const vis = overlaps(viewWS, r);
+      setDrawn(b, vis);
+      vis ? shown++ : hidden++;
+    }
+    return { shown, hidden };
+  }
+
+  // Coalesced per-frame update
+  function schedule() {
+    if (raf) return;
+    raf = requestAnimationFrame(function() {
+      raf = 0;
+      const viewWS = getViewportWS();
+      if (!viewWS) return;
+      updateBorder(viewWS);
+      const stats = cullUsing(viewWS);
+      if (LOG_VERBOSE) {
+        console.log('[Culling] shown=%d hidden=%d scale=(%f,%f)', stats.shown, stats.hidden, viewWS.scaleX, viewWS.scaleY);
+      }
+    });
+  }
+
+  function attachToWorkspace(ws) {
+    detach();
+
+    currentWorkspace = ws;
+    currentSvg = ws && ws.getParentSvg && ws.getParentSvg();
+    currentCanvas = currentSvg && findCanvas(currentSvg);
+    borderRect = null; // recreated under the new canvas
+
+    if (!currentWorkspace || !currentSvg || !currentCanvas) return;
+
+    // observe transform attribute on the active canvas (fires on pan/zoom)
+    canvasObserver = new MutationObserver(schedule);
+    canvasObserver.observe(currentCanvas, { attributes: true, attributeFilter: ['transform'] });
+
+    // backup triggers via Blockly UI events
+    uiListener = function(e){
+      try {
+        if (e && (
+              e.type === 'viewport_change' ||
+              (e.type === Blockly.Events.UI &&
+               (e.element === 'zoom' || e.element === 'workspaceZoom' ||
+                e.element === 'viewDrag' || e.element === 'scrollbarPosition'))
+            )) { schedule(); return; }
+      } catch(_) {}
+      schedule();
+    };
+    currentWorkspace.addChangeListener(uiListener);
+
+    // window resize changes viewport size
+    window.addEventListener('resize', schedule);
+
+    // initial draw
+    schedule();
+  }
+
+  function detach() {
+    try { if (canvasObserver) canvasObserver.disconnect(); } catch(_) {}
+    canvasObserver = null;
+
+    try { if (currentWorkspace && uiListener) currentWorkspace.removeChangeListener(uiListener); } catch(_) {}
+    uiListener = null;
+
+    window.removeEventListener('resize', schedule);
+  }
+
+  // ---- 🔥 Watch for workspace changes (tab switches) -----------------------
+  function setupWorkspaceWatcher() {
+    let last = null;
+    function checkWorkspace() {
+      const ws = Blockly.getMainWorkspace && Blockly.getMainWorkspace();
+      if (ws && ws !== last) {
+        last = ws;
+        attachToWorkspace(ws);
+      }
+    }
+    setInterval(checkWorkspace, POLL_MS); // <-- now uses the inner constant
+    checkWorkspace();
+  }
+
+  setupWorkspaceWatcher();
+
+  // Expose a tiny API for manual control / debugging
+  window.__v3dPuzzleVirtualizer = {
+    setPaddingPx: function(v){ var n = Number(v); if (Number.isFinite(n)) { PAD_PX = n; schedule(); } },
+    runOnce: function(){ schedule(); },
+    disable: function(){
+      var ws = Blockly.getMainWorkspace && Blockly.getMainWorkspace();
+      if (ws && ws.getTopBlocks) {
+        ws.getTopBlocks(false).forEach(function(b){ setDrawn(b, true); });
+      }
+      detach();
+      var r = document.getElementById('__v3dViewportBorder__');
+      if (r && r.parentNode) r.parentNode.removeChild(r);
+      delete window.__v3dPuzzleVirtualizer;
+      console.log('[Culling Disabled]');
+    }
+  };
+})();`;
+}
+</script>

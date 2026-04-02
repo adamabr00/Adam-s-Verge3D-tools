@@ -8,8 +8,8 @@
 function code(block) {
   return `(function () {
   const params = new URLSearchParams(location.search);
-  if (!params.has('logic')) { console.log('[G-drag] Skipped: no ?logic param.'); return; }
-  if (window.__GDragInstalled) { console.log('[G-drag] Already installed.'); return; }
+  if (!params.has('logic')) return;
+  if (window.__GDragInstalled) return;
   window.__GDragInstalled = true;
 
   // --- Shim: silence "className.indexOf is not a function" for SVG elements ---
@@ -19,7 +19,6 @@ function code(block) {
         value: function (s) { return String(this.baseVal || '').indexOf(s); },
         configurable: true
       });
-      console.log('[G-drag] Shim installed for SVGAnimatedString.indexOf');
     }
   } catch (err) { console.debug('[G-drag] Shim install failed:', err); }
 
@@ -264,8 +263,6 @@ function code(block) {
   }, true);
 
   window.addEventListener('blur', () => endDrag({ cancel: false }));
-
-  console.log('[G-drag] Ready. Select a block, press G to grab. Click to drop, right-click to cancel/restore connections.');
 })();`;
 }
 </script>

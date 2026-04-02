@@ -18,7 +18,15 @@
                                 <next>
                                   <block type="multiSelect">
                                     <next>
-                                      <block type="floatingToolbar"></block>
+                                      <block type="procedureRetargetLoader">
+                                        <next>
+                                          <block type="moveToTabV2">
+                                            <next>
+                                              <block type="floatingToolbar"></block>
+                                            </next>
+                                          </block>
+                                        </next>
+                                      </block>
                                     </next>
                                   </block>
                                 </next>
@@ -46,6 +54,8 @@
     <block type="mathExpression"></block>
     <block type="localView"></block>
     <block type="multiSelect"></block>
+    <block type="procedureRetargetLoader"></block>
+    <block type="moveToTabV2"></block>
     <block type="floatingToolbar"></block>
 
 

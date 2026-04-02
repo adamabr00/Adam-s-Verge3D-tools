@@ -1,0 +1,201 @@
+# Block Duplication Feature PRD
+
+## Overview
+Implement a block duplication system that allows users to quickly duplicate selected blocks using the Shift+D keyboard shortcut. The duplicated block should appear at the cursor position and follow the mouse cursor until the user clicks to place it. This feature will significantly improve the efficiency of puzzle creation by eliminating the need to manually recreate similar blocks.
+
+## Core Features
+
+### 1. Keyboard Shortcut System
+- **Shortcut**: Shift+D to duplicate the currently selected block
+- **Activation**: Only works when a block is selected in the workspace
+- **Visual Feedback**: Clear indication when duplication is triggered
+- **Error Handling**: Graceful handling when no block is selected
+
+### 2. Block Duplication Engine
+- **Exact Copy**: Create an identical copy of the selected block
+- **Preserve Properties**: Maintain all block properties, connections, and configurations
+- **Generate Unique ID**: Ensure the duplicated block has a unique identifier
+- **Maintain Type**: Preserve the block type and category information
+
+### 3. Cursor-Following Behavior
+- **Initial Position**: Duplicated block appears at current cursor position
+- **Mouse Tracking**: Block follows mouse cursor movement in real-time
+- **Visual Preview**: Show the block in a semi-transparent or highlighted state
+- **Smooth Movement**: Ensure smooth cursor following without lag
+
+### 4. Placement System
+- **Click to Place**: Left mouse click places the duplicated block
+- **Valid Placement**: Only allow placement in valid drop zones
+- **Connection Detection**: Automatically connect to nearby compatible blocks
+- **Cancel Option**: Right-click or Escape key cancels the duplication
+
+## User Experience
+
+### Primary User Persona
+- **Puzzle Creators**: Need to quickly create multiple similar blocks
+- **Blockly Power Users**: Want efficient block manipulation tools
+- **Verge3D Developers**: Creating complex puzzle structures
+
+### Key User Flows
+1. **Selection**: User selects a block in the workspace
+2. **Duplication**: User presses Shift+D to duplicate the block
+3. **Positioning**: Duplicated block appears and follows cursor
+4. **Placement**: User clicks to place the block in desired location
+5. **Completion**: Block is placed and becomes part of the workspace
+
+### UI/UX Considerations
+- **Visual Feedback**: Clear indication of duplication state
+- **Cursor Integration**: Seamless integration with existing cursor behavior
+- **Performance**: Smooth 60fps cursor following
+- **Accessibility**: Keyboard shortcuts work with screen readers
+
+## Technical Architecture
+
+### System Components
+- **Keyboard Event Handler**: Intercept Shift+D key combination
+- **Block Duplication Engine**: Create exact copies of blocks
+- **Cursor Tracking System**: Follow mouse movement in real-time
+- **Placement Validation**: Ensure valid block placement
+- **Visual Feedback System**: Show duplication state and preview
+
+### Data Models
+- **Block Copy**: Deep copy of block structure and properties
+- **Cursor State**: Track mouse position and movement
+- **Placement State**: Track whether block is being placed
+- **Validation Rules**: Define valid placement zones
+
+### APIs and Integrations
+- **Blockly API**: Use Blockly's block duplication methods
+- **DOM Events**: Mouse and keyboard event handling
+- **Verge3D Integration**: Work within Verge3D puzzle system
+- **Canvas Rendering**: Smooth visual updates
+
+### Infrastructure Requirements
+- **Event System**: Robust keyboard and mouse event handling
+- **Performance**: Efficient cursor tracking and rendering
+- **Memory Management**: Proper cleanup of temporary blocks
+- **Error Recovery**: Handle edge cases and errors gracefully
+
+## Development Roadmap
+
+### Phase 1: Foundation (MVP)
+- Implement Shift+D keyboard shortcut detection
+- Create basic block duplication functionality
+- Add cursor-following behavior
+- Implement left-click placement
+
+### Phase 2: Enhanced Features
+- Add visual feedback and preview states
+- Implement placement validation
+- Add cancel functionality (right-click/Escape)
+- Optimize performance for smooth movement
+
+### Phase 3: Advanced Features
+- Add multi-block duplication support
+- Implement smart connection detection
+- Add duplication history and undo support
+- Create duplication templates and presets
+
+### Phase 4: Integration & Polish
+- Performance optimization for large workspaces
+- Accessibility improvements
+- Documentation and user guides
+- Testing and quality assurance
+
+## Logical Dependency Chain
+
+### Foundation First
+1. **Keyboard Event System**: Detect Shift+D combination
+2. **Block Selection Detection**: Identify currently selected block
+3. **Block Duplication**: Create exact copy of selected block
+4. **Cursor Integration**: Position duplicated block at cursor
+
+### Usable Frontend
+1. **Mouse Tracking**: Block follows cursor movement
+2. **Visual Preview**: Show block in placement mode
+3. **Click Placement**: Left-click places the block
+4. **Validation**: Ensure valid placement locations
+
+### Progressive Enhancement
+1. **Visual Feedback**: Better preview and state indicators
+2. **Smart Placement**: Automatic connection detection
+3. **Cancel Options**: Right-click and Escape key support
+4. **Performance**: Optimize for smooth operation
+
+## Risks and Mitigations
+
+### Technical Challenges
+- **Performance Issues**: Risk of lag during cursor following
+  - *Mitigation*: Optimize rendering and use efficient algorithms
+- **Blockly API Limitations**: Risk of API changes affecting duplication
+  - *Mitigation*: Use stable Blockly methods and add compatibility layers
+- **Memory Leaks**: Risk of temporary blocks not being cleaned up
+  - *Mitigation*: Implement proper cleanup and memory management
+
+### User Experience Risks
+- **Confusion**: Users might not understand the duplication state
+  - *Mitigation*: Clear visual feedback and intuitive behavior
+- **Accidental Placement**: Users might place blocks unintentionally
+  - *Mitigation*: Add cancel options and confirmation for complex cases
+- **Keyboard Conflicts**: Risk of shortcut conflicts with other tools
+  - *Mitigation*: Check for conflicts and provide alternative shortcuts
+
+### Integration Challenges
+- **Verge3D Compatibility**: Risk of conflicts with Verge3D's block system
+  - *Mitigation*: Test thoroughly and follow Verge3D best practices
+- **Existing Movement System**: Risk of conflicts with current 'u'/'j' movement
+  - *Mitigation*: Ensure both systems work together harmoniously
+
+## Success Metrics
+
+### Functionality
+- **100% Success Rate**: Duplication works reliably for all block types
+- **Smooth Performance**: 60fps cursor following without lag
+- **Accurate Placement**: Blocks place exactly where user clicks
+- **No Conflicts**: Works alongside existing movement system
+
+### User Experience
+- **Intuitive Operation**: Users understand the feature immediately
+- **Fast Workflow**: Reduces time to create similar blocks by 80%
+- **Error-Free**: No accidental placements or lost blocks
+- **Accessible**: Works with keyboard-only navigation
+
+## Technical Specifications
+
+### Blockly Integration
+- **Version**: Compatible with Blockly v8
+- **Methods**: Use Blockly's built-in duplication methods where possible
+- **Events**: Integrate with Blockly's event system
+- **Rendering**: Work with Blockly's canvas rendering system
+
+### Performance Requirements
+- **Cursor Following**: 60fps smooth movement
+- **Memory Usage**: Minimal memory overhead for temporary blocks
+- **Response Time**: <100ms from key press to block appearance
+- **Cleanup**: Immediate cleanup when placement is cancelled
+
+### Browser Compatibility
+- **Modern Browsers**: Chrome, Firefox, Safari, Edge
+- **ES6+ Support**: Use modern JavaScript features
+- **Canvas Support**: Full HTML5 Canvas support
+- **Event Handling**: Robust keyboard and mouse event support
+
+## Implementation Notes
+
+### Current Codebase Integration
+- **File**: Extend `stepBlock.js` with duplication functionality
+- **Event System**: Add to existing keyboard event handler
+- **Blockly API**: Use Blockly's `Block.duplicate()` method
+- **Visual System**: Integrate with existing orange color scheme
+
+### Testing Strategy
+- **Unit Tests**: Test duplication logic and cursor tracking
+- **Integration Tests**: Test with existing movement system
+- **User Testing**: Test with various block types and configurations
+- **Performance Tests**: Ensure smooth operation with many blocks
+
+### Documentation Requirements
+- **User Guide**: Clear instructions for using the feature
+- **Developer Guide**: Technical implementation details
+- **API Reference**: Integration points for other developers
+- **Troubleshooting**: Common issues and solutions 

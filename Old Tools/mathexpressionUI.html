@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Modern Expression Dialog</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-0: #0f172a;
+      --card-border: #ffffff22;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #5b8cff;
+      --danger: #ef4444;
+      --shadow: 0 20px 40px rgba(2, 6, 23, .45);
+      --radius: 18px;
+      /* syntax colors */
+      --syn-number: #93c5fd; /* blue-300 */
+      --syn-operator: #60a5fa; /* blue-400 */
+      --syn-ident: #34d399; /* emerald-400 */
+      --syn-string: #fbbf24; /* amber-400 */
+      --syn-paren: #94a3b8; /* slate-400 */
+    }
+
+    html, body { height: 100%; }
+    body {
+      margin: 0; display: grid; place-items: center;
+      background: radial-gradient(1200px 800px at 20% 10%, #0b1020, transparent),
+                  radial-gradient(1000px 700px at 80% 90%, #0a1b2e, transparent),
+                  var(--bg-0);
+      color: var(--text);
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+    }
+    body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background-image: radial-gradient(#1f293755 1px, transparent 1px); background-size: 24px 24px; opacity: .35; }
+
+    .dialog { position: relative; width: min(560px, 92vw); padding: 28px; border-radius: var(--radius); background: linear-gradient(180deg, #101827bf, #0b1324cc); border: 1px solid var(--card-border); box-shadow: var(--shadow); backdrop-filter: blur(10px) saturate(120%); }
+
+    .dialog h1 { font-size: clamp(18px, 2.2vw, 22px); line-height: 1.25; margin: 0 0 6px; font-weight: 700; }
+    .dialog p.sub { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+
+    /* --- editor with syntax layer --- */
+    .field { position: relative; border: 1px solid #ffffff1a; border-radius: 14px; background: linear-gradient(180deg, #0c1322, #0a111e); box-shadow: inset 0 0 0 1px #00000040; }
+    .layer { position: relative; }
+
+    /* Highlight layer */
+    pre.syntax { margin: 0; padding: 14px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; font: 500 16px/1.6 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e6f0ff; }
+    pre.syntax .num { color: var(--syn-number); }
+    pre.syntax .op { color: var(--syn-operator); }
+    pre.syntax .id { color: var(--syn-ident); }
+    pre.syntax .str { color: var(--syn-string); }
+    pre.syntax .par { color: var(--syn-paren); }
+
+    /* Transparent textarea on top */
+    textarea.editor { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: 0; outline: none; background: transparent; color: transparent; caret-color: var(--accent); padding: 14px; font: 500 16px/1.6 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    textarea.editor::selection { background: #60a5fa55; }
+
+    /* Placeholder shown only when empty */
+    .placeholder { position: absolute; left: 14px; top: 12px; color: #93a4c7; font: 500 16px/1.6 "JetBrains Mono", monospace; pointer-events: none; opacity: .8; }
+
+    details.history { margin-top: 18px; color: var(--muted); }
+    details.history > summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px dashed #ffffff22; cursor: pointer; }
+    details.history > summary::marker { display: none; }
+    .chevron { transition: transform .2s ease; opacity: .7; }
+    details.history[open] .chevron { transform: rotate(90deg); }
+    .history-list { padding: 10px 4px 0 4px; font-family: "JetBrains Mono", monospace; font-size: 13px; }
+    .history-item { padding: 8px 10px; border-radius: 8px; background: #0a1223; border: 1px solid #ffffff10; margin-bottom: 8px; color: #c5d2ff; }
+
+    .actions { display: flex; gap: 14px; margin-top: 22px; }
+    .btn { appearance: none; border: 1px solid transparent; border-radius: 12px; padding: 12px 18px; font-weight: 600; font-size: 15px; cursor: pointer; transition: transform .06s ease, filter .2s ease, box-shadow .2s ease; }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { color: white; background: linear-gradient(180deg, #6ea3ff, #4d7dff); box-shadow: 0 12px 24px rgba(77, 125, 255, .35); }
+    .btn-primary:hover { filter: brightness(1.05); box-shadow: 0 16px 28px rgba(77, 125, 255, .45); }
+    .btn-ghost { color: #e5e7eb; background: linear-gradient(180deg, #0e1729, #0a1323); border-color: #ffffff22; }
+    .btn-ghost:hover { filter: brightness(1.08); }
+  </style>
+</head>
+<body>
+  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <h1 id="dlg-title">Enter Mathematical or Logical Expression</h1>
+    <p class="sub">Supports arithmetic and comparison operators</p>
+
+    <div class="field layer" id="expr-field">
+      <pre class="syntax" aria-hidden="true"><code id="hl"></code></pre>
+      <textarea id="editor" class="editor" spellcheck="false" aria-label="Expression input"></textarea>
+      <div id="placeholder" class="placeholder">e.g., 5 + x == banana</div>
+    </div>
+
+    <details class="history">
+      <summary>
+        <span>History</span>
+        <svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </summary>
+      <div class="history-list">
+        <div class="history-item">x * (y + 2) >= 14</div>
+        <div class="history-item">a && (b || !c)</div>
+        <div class="history-item">n % 2 == 0</div>
+      </div>
+    </details>
+
+    <div class="actions">
+      <button class="btn btn-primary">Convert to Blocks</button>
+      <button class="btn btn-ghost">Cancel</button>
+    </div>
+  </section>
+
+  <script>
+    const editor = document.getElementById('editor');
+    const hl = document.getElementById('hl');
+    const placeholder = document.getElementById('placeholder');
+
+    // Seed with example
+    editor.value = '5 + x == banana';
+
+    function escapeHTML(str){
+      return str.replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
+    }
+
+    // Very small tokenizer for math/logic expressions
+    const tokenRE = /("(?:\\.|[^"])*"|'(?:\\.|[^'])*')|(\b\d+(?:\.\d+)?\b)|(\b[a-zA-Z_]\w*\b)|(==|!=|<=|>=|&&|\|\||[+\-*/%<>!^=])|([(){}\[\]])/g;
+
+    function highlight(src){
+      const safe = escapeHTML(src);
+      return safe.replace(tokenRE, (m, str, num, id, op, par) => {
+        if (str) return `<span class="str">${str}</span>`;
+        if (num) return `<span class="num">${num}</span>`;
+        if (id)  return `<span class="id">${id}</span>`;
+        if (op)  return `<span class="op">${op}</span>`;
+        if (par) return `<span class="par">${par}</span>`;
+        return m;
+      });
+    }
+
+    function sync(){
+      const value = editor.value;
+      placeholder.style.display = value ? 'none' : 'block';
+      hl.innerHTML = highlight(value || '');
+      // autoresize to fit content height
+      editor.style.height = '0px';
+      editor.style.height = Math.max(48, editor.scrollHeight) + 'px';
+    }
+
+    editor.addEventListener('input', sync);
+    window.addEventListener('load', sync);
+  </script>
+</body>
+</html>

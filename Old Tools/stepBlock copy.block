@@ -1,0 +1,172 @@
+<template color="#de3900">
+    <dummy>
+        <label>Step Block Function</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+    return `
+        // Step Block Movement Functionality
+        (function() {
+            
+            // Add keyboard event listeners for arrow keys
+            function handleKeyDown(event) {
+                console.log('key pressed');
+                const selectedBlock = Blockly.selected;
+                if (!selectedBlock) return;
+                
+                switch(event.key) {
+                    case 'u':
+                        moveBlockUp(selectedBlock);
+                        event.preventDefault();
+                        break;
+                    case 'j':
+                        moveBlockDown(selectedBlock);
+                        event.preventDefault();
+                        break;
+                }
+            }
+            
+            // Function to move block up in the chain
+            function moveBlockUp(block) {
+                const parentBlock = block.getParent();
+                if (!parentBlock) {
+                    console.log('Block is already at the top');
+                    return;
+                }
+                
+                const nextBlock = block.getNextBlock();
+                const grandParent = parentBlock.getParent();
+                
+                // Store the position of the original top block (the root block in the chain)
+                let originalTopBlock = parentBlock;
+                while (originalTopBlock && originalTopBlock.getParent()) {
+                    originalTopBlock = originalTopBlock.getParent();
+                }
+                const originalTopPosition = originalTopBlock ? {
+                    x: originalTopBlock.getRelativeToSurfaceXY().x,
+                    y: originalTopBlock.getRelativeToSurfaceXY().y
+                } : null;
+
+                // Disconnect parent from grandparent (if exists)
+                if (grandParent && parentBlock.previousConnection && parentBlock.previousConnection.isConnected()) {
+                    parentBlock.previousConnection.disconnect();
+                }
+
+                // Disconnect block from parent
+                if (parentBlock && block.previousConnection && block.previousConnection.isConnected()) {
+                    block.previousConnection.disconnect();
+                }
+
+                // Disconnect block from nextBlock
+                if (block.nextConnection && block.nextConnection.isConnected()) {
+                    block.nextConnection.disconnect();
+                }
+
+                // Reconnect: grandparent -> block (if grandparent exists)
+                if (grandParent && grandParent.nextConnection) {
+                    grandParent.nextConnection.connect(block.previousConnection);
+                }
+
+                // Reconnect: block -> parent
+                block.nextConnection.connect(parentBlock.previousConnection);
+
+                // Reconnect: parent -> nextBlock (if exists)
+                if (nextBlock) {
+                    parentBlock.nextConnection.connect(nextBlock.previousConnection);
+                }
+                
+                // Find the new top block and move the entire stack to the original position
+                let newTopBlock = grandParent ? block : parentBlock;
+                while (newTopBlock && newTopBlock.getParent()) {
+                    newTopBlock = newTopBlock.getParent();
+                }
+                if (originalTopPosition && newTopBlock) {
+                    // Move the entire stack by moving the root block
+                    const currentPosition = newTopBlock.getRelativeToSurfaceXY();
+                    const deltaX = originalTopPosition.x - currentPosition.x;
+                    const deltaY = originalTopPosition.y - currentPosition.y;
+                    
+                    console.log('Moving stack from', currentPosition, 'to', originalTopPosition, 'delta:', deltaX, deltaY);
+                    
+                    // Move the root block, which will move the entire connected stack
+                    newTopBlock.moveBy(deltaX, deltaY);
+                }
+
+                console.log('Moved block up');
+            }
+            
+            // Function to move block down in the chain
+           function moveBlockDown(block) {
+                const nextBlock = block.getNextBlock();
+                if (!nextBlock) {
+                    console.log('Block is already at the bottom');
+                    return;
+                }
+
+                const nextNextBlock = nextBlock.getNextBlock();
+                const parentBlock = block.getParent();
+
+                // Store the position of the original top block (root of the stack)
+                let originalTopBlock = block;
+                while (originalTopBlock && originalTopBlock.getParent()) {
+                    originalTopBlock = originalTopBlock.getParent();
+                }
+                const originalTopPosition = originalTopBlock ? {
+                    x: originalTopBlock.getRelativeToSurfaceXY().x,
+                    y: originalTopBlock.getRelativeToSurfaceXY().y
+                } : null;
+
+                // Disconnect block from its parent
+                if (parentBlock && block.previousConnection && block.previousConnection.isConnected()) {
+                    block.previousConnection.disconnect();
+                }
+
+                // Disconnect nextBlock from block
+                if (block.nextConnection && block.nextConnection.isConnected()) {
+                    block.nextConnection.disconnect();
+                }
+
+                // Disconnect nextBlock from nextNextBlock
+                if (nextBlock.nextConnection && nextBlock.nextConnection.isConnected()) {
+                    nextBlock.nextConnection.disconnect();
+                }
+
+                // Reconnect: parent -> nextBlock
+                if (parentBlock && parentBlock.nextConnection) {
+                    parentBlock.nextConnection.connect(nextBlock.previousConnection);
+                }
+
+                // Reconnect: nextBlock -> block
+                nextBlock.nextConnection.connect(block.previousConnection);
+
+                // Reconnect: block -> nextNextBlock (if exists)
+                if (nextNextBlock) {
+                    block.nextConnection.connect(nextNextBlock.previousConnection);
+                }
+
+                // Find the new root (still the original top block!)
+                let newTopBlock = block;
+                while (newTopBlock && newTopBlock.getParent()) {
+                    newTopBlock = newTopBlock.getParent();
+                }
+
+                if (originalTopPosition && newTopBlock) {
+                    const currentPosition = newTopBlock.getRelativeToSurfaceXY();
+                    const deltaX = originalTopPosition.x - currentPosition.x;
+                    const deltaY = originalTopPosition.y - currentPosition.y;
+                    newTopBlock.moveBy(deltaX, deltaY);
+                }
+
+                console.log('Moved block down');
+            }
+            
+            // Add event listener
+            document.addEventListener('keydown', handleKeyDown);
+            
+            console.log('Step block movement enabled - use arrow keys to move selected blocks');
+        })();
+    `;
+}
+</script>

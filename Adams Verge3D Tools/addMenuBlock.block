@@ -227,7 +227,6 @@ function createBlockAtCursor(type, variableId = null) {
       try {
         const dom = Blockly.Xml.textToDom(xmlText);
         block = Blockly.Xml.domToBlock(dom, workspace);
-        console.log('✅ Created block with shadow blocks from toolbox:', type);
       } catch (xmlError) {
         console.warn('Failed to create block from toolbox XML, falling back to newBlock:', xmlError);
         block = workspace.newBlock(type);
@@ -237,7 +236,6 @@ function createBlockAtCursor(type, variableId = null) {
       // Fallback to creating empty block
       block = workspace.newBlock(type);
       block.initSvg();
-      console.log('⚠️ Created empty block (no toolbox XML found):', type);
     }
 
     // Set variable ID if provided
@@ -254,7 +252,6 @@ function createBlockAtCursor(type, variableId = null) {
     block.moveBy(workspaceX, workspaceY);
     block.render();
     block.select();
-    console.log('Created block: ' + type + (variableId ? ' (var: ' + variableId + ')' : ''));
     return block;
   } catch (err) {
     console.warn('Failed to create block ' + type + ':', err);
@@ -295,7 +292,6 @@ function loadBlockDatabase() {
   // Use the globally loaded database from init.plug
   if (window.BLOCK_DATABASE) {
     blockDatabase = window.BLOCK_DATABASE;
-    console.log('✅ Using globally loaded block database');
   } else {
     console.warn('❌ Global block database not available, using fallback');
     blockDatabase = { blocks: {}, categories: {} };
@@ -311,15 +307,12 @@ function preloadToolboxCache() {
   }
 
   try {
-    let cacheCount = 0;
-    
     function cacheBlocksInContents(contents) {
       for (const item of contents) {
         if (item.blockxml) {
           const blockType = item.blockxml.getAttribute('type');
           if (blockType && !toolboxBlockCache.has(blockType)) {
             toolboxBlockCache.set(blockType, item.blockxml.outerHTML);
-            cacheCount++;
           }
         }
         if (item.contents && Array.isArray(item.contents)) {
@@ -329,7 +322,6 @@ function preloadToolboxCache() {
     }
 
     cacheBlocksInContents(workspace.options.languageTree.contents);
-    console.log('✅ Preloaded ' + cacheCount + ' blocks into toolbox cache');
   } catch (error) {
     console.warn('❌ Failed to preload toolbox cache:', error);
   }
@@ -504,8 +496,6 @@ async function initializeFuseSearch() {
      if (allProcedures.length > 0) {
        procedureFuse = new Fuse(allProcedures, procedureFuseOptions);
      }
-    
-    console.log('✅ Fuse.js initialized successfully');
   } catch (error) {
     console.warn('❌ Failed to load Fuse.js, falling back to basic search:', error);
     blockFuse = null;
@@ -667,7 +657,6 @@ function searchProceduresFallback(procedures, searchTerm) {
 // Create and show favorites popup
 async function showFavoritesPopup() {
   if (!(await ensureBlockSearchInfrastructure())) {
-    console.log('Favorites popup disabled - logic parameter not found in URL');
     return;
   }
 
@@ -876,7 +865,6 @@ async function showSearchPopup(options) {
   const centerOnScreen = options.center === true;
 
   if (!(await ensureBlockSearchInfrastructure())) {
-    console.log('Search popup disabled - logic parameter not found in URL');
     return;
   }
 

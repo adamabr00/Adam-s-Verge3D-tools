@@ -13,7 +13,6 @@ function code(block) {
   }
 
   if (window.__multiSelectEnabled) {
-    console.log('[Multi-Select] Already enabled');
     return;
   }
   window.__multiSelectEnabled = true;
@@ -1754,9 +1753,6 @@ function code(block) {
       }
     }
   }, true);
-
-  console.log('%c[Multi-Select] Enabled! Shift+Click, Shift+drag/Ctrl+B box, G drag, Shift+D dup 2+ roots (needs Shortcuts block), Shift+Q/E or Ctrl+Q/E align/spacing', 'color: #00c853; font-weight: bold;');
-  
 })();`;
 }
 </script>

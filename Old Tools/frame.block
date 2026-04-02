@@ -1,0 +1,78 @@
+<template color="#6a8caf">
+    <dummy>
+        <label>Frame (Background)</label>
+    </dummy>
+</template>
+
+<script>
+function code(block) {
+return `(function() {
+    const ws = Blockly.getMainWorkspace();
+
+    if (!ws.frameInit) {
+        ws.frameInit = true;
+        ws.frames = {};
+
+        // ✅ Keep block SVG behind others
+        function sendToBack(block) {
+            const root = block.getSvgRoot();
+            if (root && root.parentNode.firstChild !== root) {
+                root.parentNode.insertBefore(root, root.parentNode.firstChild);
+            }
+        }
+
+        // ✅ Track and move children
+        function moveChildren(fid, dx, dy) {
+            const frame = ws.frames[fid];
+            frame.children.forEach(cid => {
+                const c = ws.getBlockById(cid);
+                if (c) c.moveBy(dx, dy);
+            });
+        }
+
+        ws.addChangeListener(function(ev) {
+            if (ev.type === Blockly.Events.BLOCK_CREATE) {
+                const b = ws.getBlockById(ev.blockId);
+                if (b && b.type === "frame_block") {
+                    ws.frames[b.id] = { block: b, children: [] };
+                    sendToBack(b);
+                }
+            }
+
+            if (ev.type === Blockly.Events.BLOCK_MOVE) {
+                const moved = ws.getBlockById(ev.blockId);
+                if (!moved) return;
+
+                // ✅ If the frame moved, move its children
+                if (ws.frames[ev.blockId]) {
+                    const f = ws.frames[ev.blockId];
+                    const newPos = moved.getRelativeToSurfaceXY();
+                    const dx = newPos.x - (f.x || newPos.x);
+                    const dy = newPos.y - (f.y || newPos.y);
+                    f.x = newPos.x;
+                    f.y = newPos.y;
+                    if (dx || dy) moveChildren(ev.blockId, dx, dy);
+                    sendToBack(moved);
+                }
+
+                // ✅ If another block moved, check if it overlaps a frame
+                Object.keys(ws.frames).forEach(fid => {
+                    if (ev.blockId === fid) return;
+                    const frame = ws.frames[fid];
+                    const pos = moved.getRelativeToSurfaceXY();
+                    const fpos = frame.block.getRelativeToSurfaceXY();
+                    const fw = 300, fh = 200; // define a virtual frame size
+                    const inside = pos.x > fpos.x && pos.x < fpos.x + fw &&
+                                   pos.y > fpos.y && pos.y < fpos.y + fh;
+                    const already = frame.children.includes(ev.blockId);
+                    if (inside && !already) frame.children.push(ev.blockId);
+                    if (!inside && already) frame.children = frame.children.filter(id => id !== ev.blockId);
+                });
+            }
+        });
+    }
+
+    return '';
+})();`;
+}
+</script>
