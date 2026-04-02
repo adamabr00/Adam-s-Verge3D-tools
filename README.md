@@ -310,7 +310,7 @@ Implementation note: the menu entry is registered with Blockly’s **`ContextMen
 
 Adds a **draggable minimap** in the corner of the puzzle editor so you can see the whole workspace and your current viewport at a glance.
 
-
+![FloatingToolbar](https://github.com/adamabr00/Adam-s-Verge3D-tools/blob/main/Gifs/Minimap.gif?raw=true)
 
 **Key Features:**
 
