@@ -1,4 +1,4 @@
-<template color="#06065A" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds a draggable minimap panel to navigate large workspaces. Shows all blocks and current viewport position.">
+<template color="#3a334d" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds a draggable minimap panel to navigate large workspaces. Shows all blocks and current viewport position.">
     <dummy>
         <label>Add Minimap</label>
     </dummy>
@@ -158,13 +158,52 @@ function code(block) {
     return canvas;
   }
 
+  /**
+   * Blockly clamps zoom-out via options.zoomOptions.minScale (default 0.3).
+   * Lower it so the puzzle editor can zoom out much further (wheel / controls).
+   */
+  function applyRelaxedWorkspaceZoomLimit(ws) {
+    try {
+      var floor = 0.05;
+      var opts = ws.options;
+      if (!opts) return;
+      if (!opts.zoomOptions) opts.zoomOptions = {};
+      var z = opts.zoomOptions;
+      var cur =
+        typeof z.minScale === 'number' && !isNaN(z.minScale) ? z.minScale : 0.3;
+      z.minScale = Math.min(cur, floor);
+    } catch (err) {}
+  }
+
   function initProMinimap(workspace) {
+    applyRelaxedWorkspaceZoomLimit(workspace);
+
     const canvas = injectUI();
     const ctx = canvas.getContext('2d');
 
     let scale = 0.1;
     let bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     let viewportRect = { x: 0, y: 0, w: 0, h: 0 };
+
+    /**
+     * Viewport in workspace coordinates (same units as getRelativeToSurfaceXY).
+     * Blockly getMetrics() mixes pixels (viewLeft/viewTop/viewWidth) with content;
+     * getMetricsManager().getViewMetrics(true) returns left/top/width/height in
+     * workspace units — see blockly MetricsManager.getViewMetrics (v8+).
+     */
+    function getViewMetricsWorkspace() {
+      if (workspace.getMetricsManager) {
+        return workspace.getMetricsManager().getViewMetrics(true);
+      }
+      const m = workspace.getMetrics();
+      const z = workspace.scale;
+      return {
+        left: m.viewLeft / z,
+        top: m.viewTop / z,
+        width: m.viewWidth / z,
+        height: m.viewHeight / z
+      };
+    }
 
     function calculateBounds() {
       const blocks = workspace.getAllBlocks(false);
@@ -182,8 +221,7 @@ function code(block) {
 
     function drawMinimap() {
       calculateBounds();
-      const metrics = workspace.getMetrics();
-      const zoom = workspace.scale;
+      const viewWs = getViewMetricsWorkspace();
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#18181c';
@@ -200,10 +238,10 @@ function code(block) {
       ctx.globalAlpha=1;
       ctx.strokeStyle = 'rgba(210, 210, 218, 0.92)';
       ctx.lineWidth = 1.5;
-      const vx=(metrics.viewLeft-bounds.minX)*scale;
-      const vy=(metrics.viewTop-bounds.minY)*scale;
-      const vw=(metrics.viewWidth/zoom)*scale;
-      const vh=(metrics.viewHeight/zoom)*scale;
+      const vx=(viewWs.left-bounds.minX)*scale;
+      const vy=(viewWs.top-bounds.minY)*scale;
+      const vw=viewWs.width*scale;
+      const vh=viewWs.height*scale;
       viewportRect={x:vx,y:vy,w:vw,h:vh};
       ctx.strokeRect(vx,vy,vw,vh);
     }
@@ -235,19 +273,25 @@ function code(block) {
 
     function moveTo(mx,my){
       calculateBounds();
-      const metrics=workspace.getMetrics();
-      const zoom=workspace.scale;
-      const tx=(mx/scale)+bounds.minX-(metrics.viewWidth/(2*zoom));
-      const ty=(my/scale)+bounds.minY-(metrics.viewHeight/(2*zoom));
-      workspace.scroll(-tx,-ty);
+      const zoom = workspace.scale;
+      const viewWs = getViewMetricsWorkspace();
+      const targetX = (mx / scale) + bounds.minX;
+      const targetY = (my / scale) + bounds.minY;
+      const newLeft = targetX - viewWs.width / 2;
+      const newTop = targetY - viewWs.height / 2;
+      workspace.scroll(-newLeft * zoom, -newTop * zoom);
       drawMinimap();
     }
 
-    /** Pan workspace while dragging: minimap pixel delta maps to scroll via same scale as moveTo. */
+    /** Pan workspace while dragging: minimap px → workspace delta → scroll px (see viewLeft = -scrollX / scale). */
     function panMinimapByPixelDelta(dmx, dmy) {
       if (dmx === 0 && dmy === 0) return;
       calculateBounds();
-      workspace.scroll(workspace.scrollX - dmx / scale, workspace.scrollY - dmy / scale);
+      const zoom = workspace.scale;
+      workspace.scroll(
+        workspace.scrollX - (dmx / scale) * zoom,
+        workspace.scrollY - (dmy / scale) * zoom
+      );
       drawMinimap();
     }
 

@@ -1,4 +1,4 @@
-<category name="Adam's Custom Tools" color="#05519A">
+<category name="Adam's Custom Tools" color="#5a6d8d">
      <!-- Master block with pre-filled statement chain -->
   <block type="masterBlock">
     <statement name="DO">

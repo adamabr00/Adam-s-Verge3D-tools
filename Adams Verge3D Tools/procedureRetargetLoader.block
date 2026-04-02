@@ -1,4 +1,4 @@
-<template color="#1a3a5c" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Editor: right-click a procedure *caller* block → Retarget all callers to… (all tabs). Requires ?logic. Chain in Master or add this block once.">
+<template color="#4e6187" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Editor: right-click a procedure *caller* block → Retarget all callers to… (all tabs). Requires ?logic. Chain in Master or add this block once.">
     <dummy>
         <label>Procedure retarget (editor context menu)</label>
     </dummy>

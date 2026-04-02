@@ -1,4 +1,4 @@
-<template color="#036AA6" prev="true" next="true" 
+<template color="#495d85" prev="true" next="true" 
   tooltip="Enable multi-selection: Shift+Click, Shift+drag / Ctrl+B box select, G multi-drag, X delete. With Keyboard Shortcuts: Shift+D duplicates 2+ top-level stacks at once. Ctrl+Q/Shift+Q align preview; Ctrl+E/Shift+E spacing; Esc cancels layout.">
   <dummy><label>Enable Multi-Selection</label></dummy>
 </template>
