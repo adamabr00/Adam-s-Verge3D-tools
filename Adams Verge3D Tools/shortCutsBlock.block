@@ -1,6 +1,6 @@
-<template color="#12121e" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts to the Puzzles editor: X for delete, Shift+D for duplicate (multiple top-level stacks when Enable Multi-Selection is on), M for disable/enable, C for collapse/expand blocks.">
+<template color="#12121e" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds keyboard shortcuts to the Puzzles editor: X for delete, Shift+D for duplicate (multiple top-level stacks when Enable Multi-Selection is on), M for disable/enable, Alt+C for collapse/expand (with Multi-Selection: Alt+C on 2+ selected blocks collapses or expands all together). Plain C is reserved for Multi-Selection circle select.">
     <dummy>
-        <label>Keyboard Shortcuts (X, Shift+D, M, C)</label>
+        <label>Keyboard Shortcuts (X, Shift+D, M, Alt+C)</label>
     </dummy>
 </template>
 
@@ -37,6 +37,13 @@ function code(block) {
       const block = Blockly.selected;
       if (block) {
         duplicateEntry.callback({ block: block, workspace: Blockly.getMainWorkspace() });
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            if (typeof window.__multiSelectStartGDragAfterDuplicate === 'function') {
+              window.__multiSelectStartGDragAfterDuplicate();
+            }
+          });
+        });
         return true;
       }
       return false;
@@ -67,15 +74,18 @@ function code(block) {
 
   registry.addKeyMapping('77', 'disable_block');
 
-  // Unregister collapse_block if it already exists
+  // Collapse/expand: Alt+C (plain C is used by Multi-Selection circle select)
+  registry.removeAllKeyMappings('collapse_block');
   if (registry.registry_['collapse_block']) {
       registry.unregister('collapse_block');
   }
 
-  // Register C for collapse/expand
   registry.register({
     name: 'collapse_block',
     callback: function() {
+      if (typeof window.__multiSelectBulkCollapseExpand === 'function' && window.__multiSelectBulkCollapseExpand()) {
+        return true;
+      }
       const block = Blockly.selected;
       if (block) {
         collapseEntry.callback({ block: block, workspace: Blockly.getMainWorkspace() });
@@ -83,12 +93,16 @@ function code(block) {
       }
       return false;
     },
-    keyCodes: ['67'], // C
-    modifiers: [],
+    keyCodes: ['67'],
+    modifiers: [Blockly.ShortcutRegistry.modifierKeys.Alt],
     allowCollision: true
   });
 
-  registry.addKeyMapping('67', 'collapse_block');
+  registry.addKeyMapping(
+    registry.createSerializedKey(67, [Blockly.ShortcutRegistry.modifierKeys.Alt]),
+    'collapse_block',
+    true
+  );
 
 
 

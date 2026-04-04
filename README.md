@@ -74,11 +74,11 @@ Adds convenient keyboard shortcuts for common puzzle operations, enhancing the u
 
 - **M key** - Toggles disable/enable state of the selected puzzle
 
-- **C key** - Toggles collapse/expand state of the selected puzzle
+- **Alt+C** - Toggles collapse/expand state of the selected puzzle (**plain C** is not used here so **Multi-Selection** can use **C** for circle select)
 
 
 
-**Usage:** Select any puzzle in the workspace, then press **X** to delete it, **Shift+D** to create a duplicate, or **M** to toggle the puzzle's enabled/disabled state. Install the **Multi-Select** puzzle for bulk delete/duplicate behavior.
+**Usage:** Select any puzzle in the workspace, then press **X** to delete it, **Shift+D** to create a duplicate, **M** to toggle enabled/disabled, or **Alt+C** to collapse/expand. Install the **Multi-Select** puzzle for bulk delete/duplicate and **C** for circle select.
 
 
 
@@ -106,9 +106,14 @@ Adds **multi-selection** on top of Blockly’s single selection: select several 
 
 - **X** - Delete all selected blocks (with the Keyboard Shortcuts plugin)
 
+- **C** - **Circle selection** (Blender-style): press **C** to enter a mode with a circular brush; **wheel** changes radius; **hold LMB and drag** to add every block the circle touches—**additive** (keeps existing selections); **hold MMB and drag** to subtract blocks under the brush; **Esc**, **right-click**, or **C** again exits. Requires **Enable Multi-Selection**
+- **Alt+C** - With the **Keyboard Shortcuts** plugin: toggles collapse/expand on the selected block; if **two or more** blocks are multi-selected, **Alt+C** collapses every selected block that supports it, or **expands all** if they are already fully collapsed (same undo group)
+
 - **Shift+D** - Duplicate **multiple top-level stacks** at once when the Keyboard Shortcuts plugin is present
 
 - **G** - Multi-drag with connection preservation (works with the G-Drag plugin)
+
+- **S** - **Scale** multi-selection (requires the **Scale Multi-Selection** puzzle, chained after multi-select): with **2+** movable top-level stacks selected, scales **workspace distances** from the **center of the selection bounds** (Blender-style). **X** / **Y** constrain scaling to one axis; **middle mouse** toggles axis from recent pointer movement; **click** to commit, **Esc** or **right-click** to cancel
 
 - **Layout previews** - **Ctrl+Q** / **Shift+Q** for horizontal alignment preview, **Ctrl+E** / **Shift+E** for vertical spacing preview; mouse to preview, click to commit, **Esc** to cancel
 
@@ -314,6 +319,8 @@ Adds a **draggable minimap** in the corner of the puzzle editor so you can see t
 
 **Key Features:**
 
+- **Extended zoom-out** - Lowers Blockly’s `zoomOptions.minScale` (Verge3D’s default is typically **0.3**) toward **0.05**, so the wheel / zoom controls can pull back much farther than stock—useful for large graphs
+
 - **Resizable panel** - Drag the panel edge to resize; the map redraws to fill the new area
 
 - **Toolbar-matched styling** - Gray panel chrome consistent with the floating toolbar
@@ -334,9 +341,19 @@ Adds a **draggable minimap** in the corner of the puzzle editor so you can see t
 
 
 
+### Disable Blockly bump + grid snap
+
+Optional puzzle placed **after Add Minimap** in the master chain (default). It **turns off workspace grid snapping** (via `grid.setSnapToGrid(false)` when available, or `grid.snapToGrid_` on older Blockly) and **replaces Blockly’s `BlockSvg.prototype.bumpNeighbours`** with a version that **still walks connected stacks** (like stock Blockly) but **does not** run the `neighbours` / `bumpAwayFrom` pass that shoves **unconnected** stacks apart—so magnetic **connect** behavior is preserved. If your editor’s Blockly build does not expose `Blockly.BlockSvg`, the puzzle retries until the API is available; check the browser console for the install log.
+
+
+
+---
+
+
+
 ### Floating Toolbar Plugin
 
-Optional **horizontal icon bar** for common actions (add menu, local view, math, minimap toggle, improved search, layout align/spacing). **Only runs in the Visual Logic editor** (the normal puzzle-editor session already loads in that context).
+Optional **horizontal icon bar** for common actions (add menu, local view, math, minimap toggle, improved search, layout align/spacing, **multi-select scale**). **Only runs in the Visual Logic editor** (the normal puzzle-editor session already loads in that context).
 
 
 
@@ -352,7 +369,7 @@ Optional **horizontal icon bar** for common actions (add menu, local view, math,
 
 - **Position remembered** - Stored per URL in **browser localStorage** (not inside your `.blend` or puzzle XML)
 
-- **Integrates with multi-select** - Layout actions align with multi-select previews where applicable
+- **Integrates with multi-select** - Layout align/spacing and **scale** (when the scale puzzle is loaded) use the same selection rules as multi-drag
 
 
 
@@ -378,6 +395,10 @@ Provides an simple block dragging interface with connection preservation and res
 
 - **Keyboard shortcut** - Press **G** to grab the selected block
 
+- **Axis lock during G-drag** - While dragging, **X** locks movement to the **horizontal** screen axis (red guide line), **Y** locks to the **vertical** axis (green guide line). **Single-block** and **multi-select** G-drag use the same model: pointer is converted to **workspace** coordinates each frame, the delta from drag start is applied to each block’s start position, and axis lock zeroes one component of that delta. The guide line passes through the **block’s screen position at drag start** (the first selected block for multi-select). Press the same key again to unlock, or press the other key to switch constraint. **Middle mouse** (one click) picks horizontal vs vertical from **recent pointer movement** (or total movement since drag start if the pointer has not moved). Press **middle mouse** again to unlock when already locked.
+
+- **Bounding-box snap** - Hold **Ctrl** while G-dragging to align the selection’s axis-aligned bounds (one block’s `getBoundingRectangle()`, or the union of selected roots for multi-drag) to **other top-level stacks** when **edges or centers** align within about **8 screen pixels** (set `window.__adamGDragSnapThresholdPx` to change). Without Ctrl, no bbox snapping runs. With axis lock, only the **free** axis snaps (horizontal lock → X snap; vertical lock → Y snap). While Ctrl is held and a snap applies, **dashed guides** show the alignment: **purple** = vertical line (X / left-right-center), **teal** = horizontal line (Y / top-bottom-center), with a short **caption** at the bottom listing selection edge → target edge and workspace coordinates.
+
 - **Smart connection handling** - Preserves all block connections (value, statement, input) during drag operations
 
 - **Click to drop** - Simple click interface for precise placement
@@ -386,7 +407,7 @@ Provides an simple block dragging interface with connection preservation and res
 
 
 
-**Usage:** Select any block in the workspace, then press **G** to initiate drag mode. Click anywhere to drop the block in its new position, or right-click to cancel and restore the block to its original location with all connections preserved.
+**Usage:** Select any block in the workspace, then press **G** to initiate drag mode. Click anywhere to drop the block in its new position, or right-click to cancel and restore the block to its original location with all connections preserved. During drag, use **X**, **Y**, and **middle mouse** for axis-locked movement and guides as described above.
 
 
 

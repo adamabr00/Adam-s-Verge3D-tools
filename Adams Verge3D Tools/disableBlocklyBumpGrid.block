@@ -1,0 +1,106 @@
+<template color="#3d3a4d" prev="true" next="true"
+  tooltip="Disables Blockly neighbour bumping (auto shove nearby stacks) and turns off workspace grid snap. Chain after minimap or early; requires Visual Logic (?logic).">
+  <dummy>
+    <label>Disable Blockly Bump + Grid Snap</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function () {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('logic')) return;
+  if (window.__adamDisableBlocklyBumpGridInstalled) return;
+
+  /**
+   * Turn off positional snap-to-grid. Uses public API when present; v8-style Grid
+   * may only expose snapToGrid_ (private name — set when setter missing).
+   */
+  const getWorkspaceGrid = function (ws) {
+    if (!ws) return null;
+    if (typeof ws.getGrid === 'function') return ws.getGrid();
+    return ws.grid_ || ws.grid || null;
+  };
+
+  const applyGridSnapOff = function (ws) {
+    try {
+      const g = getWorkspaceGrid(ws);
+      if (!g) return;
+      if (typeof g.setSnapToGrid === 'function') {
+        g.setSnapToGrid(false);
+      } else if ('snapToGrid_' in g) {
+        g.snapToGrid_ = false;
+      }
+    } catch (err) {
+      /* ignore */
+    }
+  };
+
+  const applyGridSnapOffAll = function () {
+    if (typeof Blockly !== 'undefined' && Blockly.Workspace && typeof Blockly.Workspace.getAll === 'function') {
+      var list = Blockly.Workspace.getAll();
+      for (var i = 0; i < list.length; i++) applyGridSnapOff(list[i]);
+      return;
+    }
+    applyGridSnapOff(typeof Blockly.getMainWorkspace === 'function' ? Blockly.getMainWorkspace() : null);
+  };
+
+  /**
+   * Same as Blockly's bumpNeighbours spider over connected stacks, but **without**
+   * the neighbours(snapRadius) / bumpAwayFrom loop that shoves unconnected stacks.
+   * A full no-op on bumpNeighbours broke magnetic-style connects in some builds
+   * (recursive pass is still needed for layout propagation).
+   */
+  const bumpNeighboursWithoutApart = function () {
+    if (!this.workspace) return;
+    if (this.workspace.isDragging()) return;
+    const rootBlock = this.getRootBlock();
+    if (rootBlock.isInFlyout) return;
+    const myConnections = this.getConnections_(false);
+    for (let i = 0, connection; (connection = myConnections[i]); i++) {
+      const renderedConn = connection;
+      if (renderedConn.isConnected() && renderedConn.isSuperior()) {
+        renderedConn.targetBlock().bumpNeighbours();
+      }
+    }
+  };
+
+  const patchBlockSvg = function () {
+    if (typeof Blockly === 'undefined' || !Blockly.BlockSvg || !Blockly.BlockSvg.prototype) {
+      return false;
+    }
+    const proto = Blockly.BlockSvg.prototype;
+    if (proto.__adamBumpGridPatched) return true;
+    if (typeof proto.bumpNeighbours === 'function') {
+      window.__adamBlocklyBumpNeighboursOriginal = proto.bumpNeighbours;
+      proto.bumpNeighbours = bumpNeighboursWithoutApart;
+    }
+    proto.__adamBumpGridPatched = true;
+    return true;
+  };
+
+  const install = function () {
+    if (!patchBlockSvg()) {
+      setTimeout(install, 300);
+      return;
+    }
+    window.__adamDisableBlocklyBumpGridInstalled = true;
+
+    const onWorkspace = function () {
+      applyGridSnapOffAll();
+    };
+    onWorkspace();
+    setInterval(onWorkspace, 500);
+
+    try {
+      var v = typeof Blockly !== 'undefined' && Blockly.VERSION ? Blockly.VERSION : '(unknown)';
+      console.log('[disableBlocklyBumpGrid] Blockly ' + v + ': stack-apart bump disabled; grid snap off.');
+    } catch (e) {
+      console.log('[disableBlocklyBumpGrid] Stack-apart bump disabled; grid snap off.');
+    }
+  };
+
+  install();
+})();`;
+}
+</script>

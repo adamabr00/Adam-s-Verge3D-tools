@@ -1,0 +1,966 @@
+<template color="#5a4a6d" prev="true" next="true"
+  tooltip="Multi-select: press S to scale around mean bbox centers. Drag to scale; hold Shift for ~5× finer mouse sensitivity. X/Y or Z (same as Y) or MMB for axis lock. Click or Enter to commit; Esc or right-click to cancel. Optional numeric field lower-left. 2+ stacks. Override: window.__adamTransformPreciseMouseFactor (0–1, default 0.2).">
+  <dummy>
+    <label>Scale Multi-Selection (S)</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function () {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('logic')) return;
+  if (window.__scaleSelectionInstalled) return;
+  window.__scaleSelectionInstalled = true;
+  window.__scaleSelectionScaling = false;
+  /** When true: show pivot marker + stack outline overlay. Lower-left scale field is always visible. Set window.__adamScaleHudDebug = true before this script, or window.__adamScaleSetHudDebug(true) in the console. */
+  window.__adamScaleHudDebug = window.__adamScaleHudDebug === true;
+
+  const EPS = 1e-4;
+
+  /** While Shift is held, mouse-driven scale/rotate use this fraction of cursor delta from session baseline (default 0.2 ≈ fifth). Set window.__adamTransformPreciseMouseFactor between 0 and 1 to override. */
+  const getPreciseMouseFactor = () => {
+    const v = window.__adamTransformPreciseMouseFactor;
+    return typeof v === 'number' && v > 0 && v <= 1 ? v : 0.2;
+  };
+
+  let scaling = false;
+  let moveProxy = null;
+  let overlay = null;
+  let suppressCtx = null;
+  let last = { x: 0, y: 0, shiftKey: false };
+  let blocks = [];
+  let startPositions = [];
+  let startCenters = [];
+  let pivot = { x: 0, y: 0 };
+  let startMouseWs = { x: 0, y: 0 };
+  let eventsWereEnabled = false;
+
+  let axisLocked = false;
+  let axisMode = 'h';
+  let axisLockLine = { x: 0, y: 0 };
+  let axisOriginClient = { x: 0, y: 0 };
+  let dragStartClient = { x: 0, y: 0 };
+  let lastSegment = { dx: 0, dy: 0 };
+  let lastMmbDownTs = 0;
+  let axisGuideRef = null;
+  let pivotVizSvg = null;
+  let scaleHudEl = null;
+  let scaleHudInput = null;
+  let hudCommitEnter = null;
+  let lastScaleFactor = 1;
+
+  const refreshWsCtm = (ws) => {
+    try {
+      if (ws && typeof ws.updateInverseScreenCTM === 'function') ws.updateInverseScreenCTM();
+    } catch (e) { /* ignore */ }
+  };
+
+  /** Inverse of add-menu path: ptSvg = ws*scale+origin, then screen = ptSvg * screenCTM (see addMenuBlock createBlockAtCursor). */
+  const workspaceXYToClient = (workspace, wx, wy) => {
+    refreshWsCtm(workspace);
+    try {
+      const svg = workspace.getParentSvg && workspace.getParentSvg();
+      const origin = workspace.getOriginOffsetInPixels && workspace.getOriginOffsetInPixels();
+      if (svg && origin && svg.createSVGPoint) {
+        const pt = svg.createSVGPoint();
+        pt.x = wx * workspace.scale + origin.x;
+        pt.y = wy * workspace.scale + origin.y;
+        const ctm = svg.getScreenCTM && svg.getScreenCTM();
+        if (ctm) {
+          const sp = pt.matrixTransform(ctm);
+          return { x: sp.x, y: sp.y };
+        }
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const div = workspace.getInjectionDiv && workspace.getInjectionDiv();
+      if (div && typeof div.getBoundingClientRect === 'function' && workspace.getOriginOffsetInPixels) {
+        const br = div.getBoundingClientRect();
+        const main = workspace.getOriginOffsetInPixels();
+        const cx = wx * workspace.scale + main.x;
+        const cy = wy * workspace.scale + main.y;
+        return { x: br.left + cx, y: br.top + cy };
+      }
+    } catch (e2) { /* fall through */ }
+    return { x: last.x, y: last.y };
+  };
+
+  /** Same as addMenuBlock: mouseToSvg + (pt - origin) / scale; then svgMath / injection fallbacks. */
+  const clientToWorkspace = (workspace, clientX, clientY) => {
+    refreshWsCtm(workspace);
+    try {
+      if (Blockly.browserEvents && typeof Blockly.browserEvents.mouseToSvg === 'function' &&
+          workspace.getParentSvg && workspace.getInverseScreenCTM) {
+        const svg = workspace.getParentSvg();
+        const pt = Blockly.browserEvents.mouseToSvg(
+          { clientX: clientX, clientY: clientY },
+          svg,
+          workspace.getInverseScreenCTM()
+        );
+        const origin = workspace.getOriginOffsetInPixels();
+        return {
+          x: (pt.x - origin.x) / workspace.scale,
+          y: (pt.y - origin.y) / workspace.scale
+        };
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const svg = workspace.getParentSvg && workspace.getParentSvg();
+      if (svg && workspace.getInverseScreenCTM) {
+        const pt = svg.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+        const svgPt = pt.matrixTransform(workspace.getInverseScreenCTM());
+        const origin = workspace.getOriginOffsetInPixels();
+        return {
+          x: (svgPt.x - origin.x) / workspace.scale,
+          y: (svgPt.y - origin.y) / workspace.scale
+        };
+      }
+    } catch (e2) { /* fall through */ }
+    try {
+      if (Blockly.utils && Blockly.utils.svgMath && Blockly.utils.svgMath.screenToWsCoordinates && Blockly.utils.Coordinate) {
+        const w = Blockly.utils.svgMath.screenToWsCoordinates(
+          workspace,
+          new Blockly.utils.Coordinate(clientX, clientY)
+        );
+        return { x: w.x, y: w.y };
+      }
+    } catch (e3) { /* fall through */ }
+    try {
+      const div = workspace.getInjectionDiv && workspace.getInjectionDiv();
+      if (div && workspace.getOriginOffsetInPixels) {
+        const br = div.getBoundingClientRect();
+        const main = workspace.getOriginOffsetInPixels();
+        return {
+          x: (clientX - br.left - main.x) / workspace.scale,
+          y: (clientY - br.top - main.y) / workspace.scale
+        };
+      }
+    } catch (e4) { /* fall through */ }
+    return { x: clientX, y: clientY };
+  };
+
+  /** Workspace Rect → axis-aligned screen box (four corners; same coord pipeline as Blockly). */
+  const rectWorkspaceToScreen = (workspace, r) => {
+    const corners = [
+      workspaceXYToClient(workspace, r.left, r.top),
+      workspaceXYToClient(workspace, r.right, r.top),
+      workspaceXYToClient(workspace, r.right, r.bottom),
+      workspaceXYToClient(workspace, r.left, r.bottom)
+    ];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < corners.length; i++) {
+      const c = corners[i];
+      minX = Math.min(minX, c.x); minY = Math.min(minY, c.y);
+      maxX = Math.max(maxX, c.x); maxY = Math.max(maxY, c.y);
+    }
+    return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+  };
+
+  const removePivotViz = () => {
+    if (pivotVizSvg && pivotVizSvg.parentNode) pivotVizSvg.parentNode.removeChild(pivotVizSvg);
+    pivotVizSvg = null;
+  };
+
+  /** Snapshot: each root stack bbox (reference) + pivot (mean bbox-center ws). Frozen for the session. */
+  const showPivotViz = (workspace, blockList, pivotWs) => {
+    removePivotViz();
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2147483645;');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = 'Scale pivot (mean of root bounding-box centers) and each root getBoundingRectangle() at scale start';
+    svg.appendChild(title);
+
+    for (let i = 0; i < blockList.length; i++) {
+      let r;
+      try { r = blockList[i].getBoundingRectangle(); } catch (e) { continue; }
+      if (!r) continue;
+      const box = rectWorkspaceToScreen(workspace, r);
+      const hue = (i * 47) % 360;
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', box.x);
+      rect.setAttribute('y', box.y);
+      rect.setAttribute('width', box.w);
+      rect.setAttribute('height', box.h);
+      rect.setAttribute('fill', 'hsla(' + hue + ', 70%, 50%, 0.12)');
+      rect.setAttribute('stroke', 'hsl(' + hue + ', 70%, 42%)');
+      rect.setAttribute('stroke-width', '2');
+      rect.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(rect);
+      const lab = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      lab.setAttribute('x', box.x + 4);
+      lab.setAttribute('y', box.y + 14);
+      lab.setAttribute('fill', 'hsl(' + hue + ', 70%, 30%)');
+      lab.setAttribute('font-size', '12');
+      lab.setAttribute('font-family', 'system-ui,Segoe UI,sans-serif');
+      lab.textContent = 'stack ' + (i + 1);
+      svg.appendChild(lab);
+    }
+
+    const px = workspaceXYToClient(workspace, pivotWs.x, pivotWs.y);
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const arm = 14;
+    const hLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    hLine.setAttribute('x1', px.x - arm);
+    hLine.setAttribute('x2', px.x + arm);
+    hLine.setAttribute('y1', px.y);
+    hLine.setAttribute('y2', px.y);
+    hLine.setAttribute('stroke', '#e65100');
+    hLine.setAttribute('stroke-width', '2');
+    hLine.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(hLine);
+    const vLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    vLine.setAttribute('x1', px.x);
+    vLine.setAttribute('x2', px.x);
+    vLine.setAttribute('y1', px.y - arm);
+    vLine.setAttribute('y2', px.y + arm);
+    vLine.setAttribute('stroke', '#e65100');
+    vLine.setAttribute('stroke-width', '2');
+    vLine.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(vLine);
+    const circ = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circ.setAttribute('cx', px.x);
+    circ.setAttribute('cy', px.y);
+    circ.setAttribute('r', '7');
+    circ.setAttribute('fill', '#ff9800');
+    circ.setAttribute('stroke', '#fff');
+    circ.setAttribute('stroke-width', '2');
+    circ.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(circ);
+    const cap = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    cap.setAttribute('x', px.x + 10);
+    cap.setAttribute('y', px.y - 10);
+    cap.setAttribute('fill', '#e65100');
+    cap.setAttribute('font-size', '12');
+    cap.setAttribute('font-weight', '600');
+    cap.setAttribute('font-family', 'system-ui,Segoe UI,sans-serif');
+    cap.textContent = 'pivot';
+    g.appendChild(cap);
+    const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    sub.setAttribute('x', px.x + 10);
+    sub.setAttribute('y', px.y + 6);
+    sub.setAttribute('fill', '#bf360c');
+    sub.setAttribute('font-size', '11');
+    sub.setAttribute('font-family', 'ui-monospace,Consolas,monospace');
+    sub.textContent =
+      '(' + (Math.round(pivotWs.x * 100) / 100) + ', ' + (Math.round(pivotWs.y * 100) / 100) + ') ws';
+    g.appendChild(sub);
+    svg.appendChild(g);
+
+    document.body.appendChild(svg);
+    pivotVizSvg = svg;
+  };
+
+  document.addEventListener('mousemove', e => {
+    const ox = last.x, oy = last.y;
+    last.x = e.clientX;
+    last.y = e.clientY;
+    last.shiftKey = !!e.shiftKey;
+    lastSegment.dx = last.x - ox;
+    lastSegment.dy = last.y - oy;
+  }, true);
+  const syncShiftKeys = (e) => { last.shiftKey = !!e.shiftKey; };
+  document.addEventListener('keydown', syncShiftKeys, true);
+  document.addEventListener('keyup', syncShiftKeys, true);
+
+  const removeAxisGuide = () => {
+    if (axisGuideRef && axisGuideRef.svg && axisGuideRef.svg.parentNode) {
+      axisGuideRef.svg.parentNode.removeChild(axisGuideRef.svg);
+    }
+    axisGuideRef = null;
+  };
+
+  const ensureAxisGuide = () => {
+    if (axisGuideRef) return;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2147483646;');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    const lineH = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    lineH.setAttribute('stroke', '#e53935');
+    lineH.setAttribute('stroke-width', '2');
+    lineH.setAttribute('vector-effect', 'non-scaling-stroke');
+    const lineV = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    lineV.setAttribute('stroke', '#2e7d32');
+    lineV.setAttribute('stroke-width', '2');
+    lineV.setAttribute('vector-effect', 'non-scaling-stroke');
+    svg.appendChild(lineH);
+    svg.appendChild(lineV);
+    document.body.appendChild(svg);
+    axisGuideRef = { svg, lineH, lineV };
+  };
+
+  const updateAxisGuide = () => {
+    if (!scaling) return;
+    if (!axisLocked) {
+      if (axisGuideRef) axisGuideRef.svg.style.display = 'none';
+      return;
+    }
+    ensureAxisGuide();
+    const g = axisGuideRef;
+    g.svg.style.display = 'block';
+    const w = window.innerWidth, h = window.innerHeight;
+    if (axisMode === 'h') {
+      g.lineH.setAttribute('x1', 0); g.lineH.setAttribute('x2', w);
+      g.lineH.setAttribute('y1', axisLockLine.y); g.lineH.setAttribute('y2', axisLockLine.y);
+      g.lineH.style.display = '';
+      g.lineV.style.display = 'none';
+    } else {
+      g.lineV.setAttribute('y1', 0); g.lineV.setAttribute('y2', h);
+      g.lineV.setAttribute('x1', axisLockLine.x); g.lineV.setAttribute('x2', axisLockLine.x);
+      g.lineV.style.display = '';
+      g.lineH.style.display = 'none';
+    }
+  };
+
+  /** Workspace center of block's getBoundingRectangle(), or null. */
+  const bboxCenterWs = (b) => {
+    if (!b || typeof b.getBoundingRectangle !== 'function') return null;
+    try {
+      const r = b.getBoundingRectangle();
+      if (!r) return null;
+      if (typeof r.left === 'number' && typeof r.right === 'number' &&
+          typeof r.top === 'number' && typeof r.bottom === 'number') {
+        return { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+      }
+      if (typeof r.left === 'number' && typeof r.top === 'number' &&
+          typeof r.width === 'number' && typeof r.height === 'number') {
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+    } catch (e) { /* skip */ }
+    return null;
+  };
+
+  /** Pivot P = mean of each root's bbox center (workspace). Used with anchor moves: A' = A0 + (s-1)*(C0-P). */
+  const getPivotFromBboxCenters = (centerList) => {
+    let sumX = 0, sumY = 0, n = 0;
+    for (let i = 0; i < centerList.length; i++) {
+      const c = centerList[i];
+      if (!c) continue;
+      sumX += c.x;
+      sumY += c.y;
+      n++;
+    }
+    if (!n) return null;
+    return { x: sumX / n, y: sumY / n };
+  };
+
+  const computeScaleFactor = (pWs) => {
+    const C = pivot;
+    const p0 = startMouseWs;
+    if (!axisLocked) {
+      const v0x = p0.x - C.x, v0y = p0.y - C.y;
+      const vx = pWs.x - C.x, vy = pWs.y - C.y;
+      const len0 = Math.hypot(v0x, v0y);
+      const len = Math.hypot(vx, vy);
+      if (len0 < EPS) return 1;
+      return len / len0;
+    }
+    if (axisMode === 'h') {
+      const d0 = p0.x - C.x;
+      const d = pWs.x - C.x;
+      if (Math.abs(d0) < EPS) return 1;
+      return d / d0;
+    }
+    const d0 = p0.y - C.y;
+    const d = pWs.y - C.y;
+    if (Math.abs(d0) < EPS) return 1;
+    return d / d0;
+  };
+
+  /** After numeric commit: realign mouse ratio baseline so moveHandler s=1 matches current layout (fixes Enter “doing nothing”). */
+  const reSnapshotScaleBaseline = () => {
+    const ws = blocks[0] && blocks[0].workspace;
+    if (!ws) return;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (!b || b.disposed) continue;
+      try {
+        if (typeof b.getRelativeToSurfaceXY === 'function') {
+          const p = b.getRelativeToSurfaceXY();
+          startPositions[i] = { x: p.x, y: p.y };
+        }
+        const c = bboxCenterWs(b);
+        startCenters[i] = c || startPositions[i];
+      } catch (e) { /* skip */ }
+    }
+    pivot = getPivotFromBboxCenters(startCenters);
+    if (!pivot) return;
+    try {
+      startMouseWs = clientToWorkspace(ws, last.x, last.y);
+    } catch (e1) { /* ignore */ }
+    try {
+      axisOriginClient = workspaceXYToClient(ws, pivot.x, pivot.y);
+    } catch (e2) {
+      axisOriginClient = { x: last.x, y: last.y };
+    }
+  };
+
+  const applyScale = (s) => {
+    const P = pivot;
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      const sp = startPositions[i];
+      const sc = startCenters[i];
+      if (!block || block.disposed || !sp || !sc) continue;
+      let newX, newY;
+      if (!axisLocked) {
+        newX = sp.x + (s - 1) * (sc.x - P.x);
+        newY = sp.y + (s - 1) * (sc.y - P.y);
+      } else if (axisMode === 'h') {
+        newX = sp.x + (s - 1) * (sc.x - P.x);
+        newY = sp.y;
+      } else {
+        newX = sp.x;
+        newY = sp.y + (s - 1) * (sc.y - P.y);
+      }
+      try {
+        if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+          block.moveTo(new Blockly.utils.Coordinate(newX, newY));
+        }
+      } catch (e) { /* skip */ }
+      try {
+        if (block.addSelect) block.addSelect();
+      } catch (e) { /* skip */ }
+    }
+  };
+
+  const formatScale = (s) => {
+    if (!Number.isFinite(s)) return '1';
+    if (Math.abs(s) < 1e-12) return '0';
+    const r = Math.round(s * 1e6) / 1e6;
+    return String(r);
+  };
+
+  const setScaleAndHud = (s) => {
+    if (!Number.isFinite(s)) return;
+    applyScale(s);
+    lastScaleFactor = s;
+    if (scaleHudInput && document.activeElement !== scaleHudInput) {
+      scaleHudInput.value = formatScale(s);
+    }
+    updateAxisGuide();
+  };
+
+  const moveHandler = () => {
+    if (!scaling) return;
+    if (scaleHudInput && document.activeElement === scaleHudInput) return;
+    const ws = blocks[0] && blocks[0].workspace;
+    if (!ws) return;
+    const pWsRaw = clientToWorkspace(ws, last.x, last.y);
+    const k = last.shiftKey ? getPreciseMouseFactor() : 1;
+    const pWs = {
+      x: startMouseWs.x + (pWsRaw.x - startMouseWs.x) * k,
+      y: startMouseWs.y + (pWsRaw.y - startMouseWs.y) * k
+    };
+    const s = computeScaleFactor(pWs);
+    setScaleAndHud(s);
+  };
+
+  const removeScaleHud = () => {
+    hudCommitEnter = null;
+    if (scaleHudEl && scaleHudEl.parentNode) scaleHudEl.parentNode.removeChild(scaleHudEl);
+    scaleHudEl = null;
+    scaleHudInput = null;
+  };
+
+  const parseScaleText = (raw) => {
+    const t = (raw || '').trim().toLowerCase();
+    if (t === '' || t === 'one' || t === '1') return 1;
+    if (t === 'zero' || t === '0') return 0;
+    const n = parseFloat(String(raw).replace(',', '.'));
+    return Number.isFinite(n) ? n : NaN;
+  };
+
+  /** Finite scale from field text, or null while incomplete (e.g. lone "-"). */
+  const tryParseLiveScale = (raw) => {
+    const t = (raw || '').trim();
+    if (t === '' || t === '-' || t === '.' || t === ',') return null;
+    const n = parseFloat(String(raw).replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  /** Enter commits: window capture runs before Blockly/document so we win the race on keydown. */
+  const onScaleHudEnterKey = (e) => {
+    if (!scaling || !hudCommitEnter) return;
+    if (e.key !== 'Enter' && e.code !== 'NumpadEnter') return;
+    if (!scaleHudInput || document.activeElement !== scaleHudInput) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    hudCommitEnter();
+  };
+  window.addEventListener('keydown', onScaleHudEnterKey, true);
+
+  /** Fallback if another handler stops keydown before ours (keyup still fires). */
+  const onScaleHudEnterKeyUp = (e) => {
+    if (!scaling || !hudCommitEnter) return;
+    if (e.key !== 'Enter' && e.code !== 'NumpadEnter') return;
+    if (!scaleHudInput || document.activeElement !== scaleHudInput) return;
+    e.preventDefault();
+    e.stopPropagation();
+    hudCommitEnter();
+  };
+  window.addEventListener('keyup', onScaleHudEnterKeyUp, true);
+
+  const createScaleHud = () => {
+    removeScaleHud();
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'position:fixed;bottom:12px;left:12px;z-index:2147483648;display:flex;flex-direction:column;align-items:flex-start;gap:4px;' +
+      'font:12px/1.35 system-ui,Segoe UI,sans-serif;color:#eceff1;background:rgba(33,33,33,0.94);padding:8px 10px;border-radius:8px;' +
+      'box-shadow:0 2px 12px rgba(0,0,0,0.35);pointer-events:auto;max-width:min(96vw,300px);';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;';
+    const lab = document.createElement('label');
+    lab.textContent = 'Scale';
+    lab.setAttribute('for', '__adamScaleFactorInput');
+    lab.style.cssText = 'font-weight:600;color:#b0bec5;';
+    const input = document.createElement('input');
+    input.id = '__adamScaleFactorInput';
+    input.type = 'text';
+    input.setAttribute('inputmode', 'decimal');
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.style.cssText =
+      'width:92px;padding:4px 8px;border:1px solid #546e7a;border-radius:4px;background:#263238;color:#eee;font:13px ui-monospace,Consolas,monospace;';
+    input.value = formatScale(lastScaleFactor);
+    row.appendChild(lab);
+    row.appendChild(input);
+    wrap.appendChild(row);
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#90a4ae;line-height:1.35;';
+    hint.textContent =
+      'Enter commits the session (like clicking), after drag or from the field. Hold Shift for finer mouse scaling. Live typing; X/Y/Z (Z = Y lock) anytime. 0 = toward pivot.';
+    wrap.appendChild(hint);
+    document.body.appendChild(wrap);
+    scaleHudEl = wrap;
+    scaleHudInput = input;
+
+    const applyFromInput = () => {
+      if (!scaling) return;
+      const n = parseScaleText(input.value);
+      if (!Number.isFinite(n)) {
+        input.style.borderColor = '#c62828';
+        input.value = formatScale(lastScaleFactor);
+        return;
+      }
+      input.style.borderColor = '#546e7a';
+      setScaleAndHud(n);
+      reSnapshotScaleBaseline();
+    };
+
+    /** Do not call input.blur() here: blur would synchronously run applyFromInput again, and after reSnapshotScaleBaseline the second applyScale(n) doubles the effect. endScale sets scaling=false before removeScaleHud. */
+    hudCommitEnter = () => {
+      applyFromInput();
+      endScale({ cancel: false });
+    };
+
+    const isNumericKeyAllowed = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        const c = e.key && e.key.toLowerCase();
+        if (c === 'a' || c === 'c' || c === 'v' || c === 'x' || c === 'z') return true;
+      }
+      const k = e.key;
+      if (k === 'Backspace' || k === 'Delete' || k === 'Tab' || k === 'Escape') return true;
+      if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown' || k === 'Home' || k === 'End') return true;
+      if (k >= '0' && k <= '9') return true;
+      if (k === '.' || k === ',') {
+        const val = input.value;
+        const ss = input.selectionStart != null ? input.selectionStart : 0;
+        const se = input.selectionEnd != null ? input.selectionEnd : 0;
+        const before = val.slice(0, ss);
+        const after = val.slice(se);
+        const combined = before + after;
+        if (combined.indexOf('.') >= 0 || combined.indexOf(',') >= 0) return false;
+        return true;
+      }
+      if (k === '-') {
+        const val = input.value;
+        const ss = input.selectionStart != null ? input.selectionStart : 0;
+        const se = input.selectionEnd != null ? input.selectionEnd : 0;
+        if (ss === 0 && !val.slice(0, se).includes('-')) return true;
+        return false;
+      }
+      return false;
+    };
+
+    input.addEventListener('blur', () => {
+      applyFromInput();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        if (hudCommitEnter) hudCommitEnter();
+        return;
+      }
+      if (isNumericKeyAllowed(e)) return;
+      if (e.key && e.key.length === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+    input.addEventListener('input', () => {
+      const v = input.value;
+      const cleaned = v.replace(/[^0-9.,-]/g, '').replace(/(?!^)-/g, '');
+      let out = cleaned;
+      const sep = out.search(/[.,]/);
+      if (sep >= 0) {
+        const head = out.slice(0, sep + 1);
+        const tail = out.slice(sep + 1).replace(/[.,]/g, '');
+        out = head + tail;
+      }
+      if (out !== v) {
+        const ss = input.selectionStart;
+        input.value = out;
+        try {
+          if (ss != null) input.setSelectionRange(Math.min(ss, out.length), Math.min(ss, out.length));
+        } catch (err) { /* ignore */ }
+      }
+      const n = tryParseLiveScale(input.value);
+      if (n !== null) {
+        input.style.borderColor = '#546e7a';
+        setScaleAndHud(n);
+      }
+    });
+  };
+
+  const isTypingTarget = (t) => {
+    if (scaleHudInput && (t === scaleHudInput || (scaleHudEl && scaleHudEl.contains && scaleHudEl.contains(t)))) return true;
+    return typeof window.__adamIsTypingTarget === 'function'
+      ? window.__adamIsTypingTarget(t)
+      : !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
+  };
+
+  const canStartScale = () => {
+    if (window.__rotateSelectionRotating) return false;
+    if (!window.__multiSelectEnabled) return false;
+    if (typeof window.__multiSelectIsMultiDragging === 'function' && window.__multiSelectIsMultiDragging()) return false;
+    if (typeof window.__multiSelectIsLayoutModeActive === 'function' && window.__multiSelectIsLayoutModeActive()) return false;
+    if (window.__grabBlockDragging) return false;
+    if (typeof Blockly === 'undefined' || !Blockly.getMainWorkspace) return false;
+    const ws = Blockly.getMainWorkspace();
+    if (!ws || ws.options.readOnly) return false;
+    const getSafe = window.__multiSelectGetBlocksSafeForWorkspaceMove;
+    if (typeof getSafe !== 'function') return false;
+    return getSafe().length >= 2;
+  };
+
+  /** Route 0–9 . , - to scale HUD when field not focused (type without clicking; Blender-like). */
+  const shouldRouteNumericToScaleHud = (e) => {
+    if (!scaling || !scaleHudInput) return false;
+    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (e.repeat) return false;
+    const ae = document.activeElement;
+    if (ae === scaleHudInput || (scaleHudEl && scaleHudEl.contains && scaleHudEl.contains(ae))) return false;
+    const t = e.target;
+    if (t && t !== scaleHudInput) {
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return false;
+      if (typeof window.__adamIsTypingTarget === 'function' && window.__adamIsTypingTarget(t)) return false;
+    }
+    const k = e.key;
+    if (k >= '0' && k <= '9') return true;
+    if (k === '.' || k === ',') return true;
+    if (k === '-') return true;
+    return false;
+  };
+
+  const onScaleDirectNumeric = (e) => {
+    if (!shouldRouteNumericToScaleHud(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const k = e.key;
+    scaleHudInput.focus();
+    scaleHudInput.value = k === ',' ? ',' : k;
+    const len = scaleHudInput.value.length;
+    try {
+      scaleHudInput.setSelectionRange(len, len);
+    } catch (err) { /* ignore */ }
+    scaleHudInput.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  const onAxisKeyScale = (e) => {
+    if (!scaling) return;
+    const k = e.key && e.key.toLowerCase();
+    const axisKey = k === 'z' ? 'y' : k;
+    if (axisKey !== 'x' && axisKey !== 'y') return;
+    if (e.repeat) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    if (axisKey === 'x') {
+      if (axisLocked && axisMode === 'h') axisLocked = false;
+      else if (axisLocked && axisMode === 'v') {
+        axisMode = 'h';
+        if (axisOriginClient) axisLockLine = { x: axisOriginClient.x, y: axisOriginClient.y };
+        axisLocked = true;
+      } else {
+        axisMode = 'h';
+        if (axisOriginClient) axisLockLine = { x: axisOriginClient.x, y: axisOriginClient.y };
+        axisLocked = true;
+      }
+    } else {
+      if (axisLocked && axisMode === 'v') axisLocked = false;
+      else if (axisLocked && axisMode === 'h') {
+        axisMode = 'v';
+        if (axisOriginClient) axisLockLine = { x: axisOriginClient.x, y: axisOriginClient.y };
+        axisLocked = true;
+      } else {
+        axisMode = 'v';
+        if (axisOriginClient) axisLockLine = { x: axisOriginClient.x, y: axisOriginClient.y };
+        axisLocked = true;
+      }
+    }
+    updateAxisGuide();
+  };
+
+  const onMmbDownScale = (e) => {
+    if (!scaling) return;
+    const btn = e.button !== undefined ? e.button : (e.which !== undefined ? e.which - 1 : -1);
+    if (btn !== 1) return;
+    const now = Date.now();
+    if (now - lastMmbDownTs < 80) return;
+    lastMmbDownTs = now;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    if (axisLocked) {
+      axisLocked = false;
+    } else {
+      let sdx = lastSegment.dx, sdy = lastSegment.dy;
+      if (sdx === 0 && sdy === 0 && dragStartClient) {
+        sdx = last.x - dragStartClient.x;
+        sdy = last.y - dragStartClient.y;
+      }
+      axisMode = Math.abs(sdx) > Math.abs(sdy) ? 'h' : 'v';
+      if (axisOriginClient) axisLockLine = { x: axisOriginClient.x, y: axisOriginClient.y };
+      axisLocked = true;
+    }
+    updateAxisGuide();
+  };
+
+  document.addEventListener('keydown', onAxisKeyScale, true);
+  document.addEventListener('keydown', onScaleDirectNumeric, true);
+  document.addEventListener('pointerdown', onMmbDownScale, true);
+  if (!window.PointerEvent) document.addEventListener('mousedown', onMmbDownScale, true);
+
+  const makeOverlay = () => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:transparent;cursor:default;pointer-events:auto;';
+    const swallow = ev => { ev.preventDefault(); ev.stopPropagation(); };
+    ['click','dblclick','pointerup','mouseup','mousemove','wheel','contextmenu'].forEach(t => el.addEventListener(t, swallow, true));
+    el.addEventListener('pointerdown', e => {
+      if (!scaling) return;
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation?.();
+      const cancel = (e.button === 2 || e.which === 3);
+      endScale({ cancel });
+    }, true);
+    document.body.appendChild(el);
+    return el;
+  };
+
+  const startScale = () => {
+    if (window.__rotateSelectionRotating) {
+      console.warn('[Scale] Rotate session active.');
+      return;
+    }
+    if (!canStartScale()) {
+      console.warn('[Scale] Need 2+ movable top-level blocks, multi-select enabled, and idle editor.');
+      return;
+    }
+    const getSafe = window.__multiSelectGetBlocksSafeForWorkspaceMove;
+    blocks = getSafe().slice();
+    startPositions = blocks.map(b => {
+      if (b && typeof b.getRelativeToSurfaceXY === 'function') {
+        const p = b.getRelativeToSurfaceXY();
+        return { x: p.x, y: p.y };
+      }
+      return null;
+    });
+    startCenters = blocks.map((b, i) => {
+      const c = bboxCenterWs(b);
+      const sp = startPositions[i];
+      if (c) return c;
+      if (sp) return { x: sp.x, y: sp.y };
+      return null;
+    });
+    pivot = getPivotFromBboxCenters(startCenters);
+    if (!pivot) {
+      blocks = [];
+      console.warn('[Scale] Could not compute pivot.');
+      return;
+    }
+    const ws = blocks[0].workspace;
+    if (!ws) {
+      blocks = [];
+      return;
+    }
+    startMouseWs = clientToWorkspace(ws, last.x, last.y);
+    try {
+      axisOriginClient = workspaceXYToClient(ws, pivot.x, pivot.y);
+    } catch (err) {
+      axisOriginClient = { x: last.x, y: last.y };
+    }
+    if (window.__adamScaleHudDebug === true) {
+      try {
+        showPivotViz(ws, blocks, pivot);
+      } catch (err) {
+        console.debug('[Scale] Pivot overlay failed:', err);
+      }
+    }
+    dragStartClient = { x: last.x, y: last.y };
+    lastSegment = { dx: 0, dy: 0 };
+    axisLocked = false;
+    removeAxisGuide();
+
+    eventsWereEnabled = Blockly.Events.isEnabled();
+    if (eventsWereEnabled) Blockly.Events.disable();
+
+    scaling = true;
+    window.__scaleSelectionScaling = true;
+    overlay = makeOverlay();
+    suppressCtx = e => { e.preventDefault(); };
+    window.addEventListener('contextmenu', suppressCtx, true);
+
+    lastScaleFactor = 1;
+    createScaleHud();
+    moveHandler();
+    moveProxy = moveHandler;
+    document.addEventListener('mousemove', moveProxy, true);
+
+    blocks.forEach(b => {
+      try { if (b.addSelect) b.addSelect(); } catch (e) {}
+    });
+
+    console.log('[Scale] Drag to scale from pivot (mean of root bbox centers). Shift = finer mouse · Enter or click to commit · Esc / RMB cancel · X/Y/Z/MMB axis · optional numeric field.');
+  };
+
+  const endScale = ({ cancel }) => {
+    if (!scaling) return;
+
+    const savedBlocks = blocks.slice();
+    const savedStarts = startPositions.slice();
+
+    if (moveProxy) document.removeEventListener('mousemove', moveProxy, true);
+    moveProxy = null;
+
+    scaling = false;
+    window.__scaleSelectionScaling = false;
+
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    overlay = null;
+    if (suppressCtx) window.removeEventListener('contextmenu', suppressCtx, true);
+    suppressCtx = null;
+
+    axisOriginClient = null;
+
+    if (eventsWereEnabled) Blockly.Events.enable();
+    eventsWereEnabled = false;
+
+    if (cancel) {
+      const restoreAll = () => {
+        try {
+          savedBlocks.forEach((b, i) => {
+            const sp = savedStarts[i];
+            if (!b || b.disposed || !sp) return;
+            if (typeof b.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+              b.moveTo(new Blockly.utils.Coordinate(sp.x, sp.y));
+            }
+          });
+          console.log('[Scale] Cancelled — positions restored.');
+        } catch (e) {
+          console.debug('[Scale] Restore failed:', e);
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(restoreAll));
+    } else {
+      const wasGrouped = Blockly.Events.getGroup();
+      Blockly.Events.setGroup(true);
+      try {
+        savedBlocks.forEach((b, i) => {
+          const sp = savedStarts[i];
+          if (!b || b.disposed || !sp || typeof b.getRelativeToSurfaceXY !== 'function') return;
+          const cur = b.getRelativeToSurfaceXY();
+          if (Math.abs(cur.x - sp.x) > 0.1 || Math.abs(cur.y - sp.y) > 0.1) {
+            if (Blockly.Events.BlockMove) {
+              const moveEvent = new Blockly.Events.BlockMove(b);
+              moveEvent.newCoordinate = new Blockly.utils.Coordinate(cur.x, cur.y);
+              moveEvent.oldCoordinate = new Blockly.utils.Coordinate(sp.x, sp.y);
+              Blockly.Events.fire(moveEvent);
+            }
+          }
+        });
+      } finally {
+        Blockly.Events.setGroup(wasGrouped);
+      }
+    }
+
+    blocks = [];
+    startPositions = [];
+    startCenters = [];
+    pivot = { x: 0, y: 0 };
+    axisLocked = false;
+    removeAxisGuide();
+    removePivotViz();
+    removeScaleHud();
+
+    setTimeout(() => console.log('[Scale] Ended.'), 0);
+  };
+
+  /** Enter after mouse-only drag: commit session (same as click). HUD field uses hudCommitEnter → endScale. */
+  const onScaleEnterCommitSession = (e) => {
+    if (!scaling) return;
+    if (e.key !== 'Enter' && e.code !== 'NumpadEnter') return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (scaleHudInput && document.activeElement === scaleHudInput) return;
+    if (isTypingTarget(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    endScale({ cancel: false });
+  };
+  window.addEventListener('keydown', onScaleEnterCommitSession, true);
+
+  document.addEventListener('keydown', e => {
+    if (e.key && e.key.toLowerCase() === 's' && !scaling && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (window.__rotateSelectionRotating) return;
+      if (isTypingTarget(e.target)) return;
+      if (!canStartScale()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      startScale();
+      return;
+    }
+    if (e.key === 'Escape' && scaling) {
+      e.preventDefault();
+      e.stopPropagation();
+      endScale({ cancel: true });
+    }
+  }, true);
+
+  window.addEventListener('blur', () => {
+    if (scaling) endScale({ cancel: false });
+  });
+
+  window.__adamScaleSetHudDebug = function (on) {
+    window.__adamScaleHudDebug = !!on;
+    if (!scaling) return;
+    const ws = blocks[0] && blocks[0].workspace;
+    if (!ws || !pivot) return;
+    if (window.__adamScaleHudDebug === true) {
+      try {
+        showPivotViz(ws, blocks, pivot);
+      } catch (e) { /* ignore */ }
+    } else {
+      removePivotViz();
+    }
+  };
+
+  window.__scaleSelectionEnter = startScale;
+})();`;
+}
+</script>
