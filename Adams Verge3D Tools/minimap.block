@@ -1,4 +1,4 @@
-<template color="#3a334d" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds a draggable minimap panel to navigate large workspaces. Shows all blocks and current viewport position.">
+<template color="#3a334d" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Adds a draggable minimap panel to navigate large workspaces. Shows blocks (except Verge3D proxy procedure stubs) and current viewport position.">
     <dummy>
         <label>Add Minimap</label>
     </dummy>
@@ -205,8 +205,19 @@ function code(block) {
       };
     }
 
+    /** Verge3D syncs proxy procedure defs onto tabs; omit from minimap (see isProxyProcDefBlock_ in moveToTabV2). */
+    function includeBlockInMinimap(b) {
+      if (!b) return false;
+      if (b.isProxyProcDefBlock_) return false;
+      return true;
+    }
+
+    function getMinimapBlocks(ws) {
+      return ws.getAllBlocks(false).filter(includeBlockInMinimap);
+    }
+
     function calculateBounds() {
-      const blocks = workspace.getAllBlocks(false);
+      const blocks = getMinimapBlocks(workspace);
       if (blocks.length === 0) { bounds = {minX:0,minY:0,maxX:500,maxY:500}; return; }
       let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
       blocks.forEach(b => {
@@ -227,7 +238,7 @@ function code(block) {
       ctx.fillStyle = '#18181c';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      workspace.getAllBlocks(false).forEach(block=>{
+      getMinimapBlocks(workspace).forEach(block=>{
         const pos=block.getRelativeToSurfaceXY();
         const size=block.getHeightWidth();
         ctx.fillStyle=block.getColour?block.getColour():"#6e6e78";
