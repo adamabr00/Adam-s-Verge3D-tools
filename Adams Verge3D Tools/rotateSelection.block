@@ -1,0 +1,809 @@
+<template color="#4a6d5a" prev="true" next="true"
+  tooltip="Multi-select: press R to rotate around mean bbox centers (same pivot as scale). Drag to rotate; hold Shift for ~5× finer mouse sensitivity. Optional degrees field lower-left. Click or Enter to commit; Esc or right-click to cancel. 2+ stacks. Override: window.__adamTransformPreciseMouseFactor (0–1, default 0.2). Chain after multiSelect.">
+  <dummy>
+    <label>Rotate Multi-Selection (R)</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function () {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('logic')) return;
+  if (window.__rotateSelectionInstalled) return;
+  window.__rotateSelectionInstalled = true;
+  window.__rotateSelectionRotating = false;
+  window.__adamRotateHudDebug = window.__adamRotateHudDebug === true;
+
+  const EPS = 1e-4;
+  const ROT_ACCENT = '#00897b';
+
+  const getPreciseMouseFactor = () => {
+    const v = window.__adamTransformPreciseMouseFactor;
+    return typeof v === 'number' && v > 0 && v <= 1 ? v : 0.2;
+  };
+
+  let rotating = false;
+  let moveProxy = null;
+  let overlay = null;
+  let suppressCtx = null;
+  let last = { x: 0, y: 0, shiftKey: false };
+  let blocks = [];
+  let startPositions = [];
+  let startCenters = [];
+  let pivot = { x: 0, y: 0 };
+  let startMouseWs = { x: 0, y: 0 };
+  let eventsWereEnabled = false;
+
+  let pivotVizSvg = null;
+  let rotateHudEl = null;
+  let rotateHudInput = null;
+  let hudCommitEnter = null;
+  let lastAngleRad = 0;
+
+  const refreshWsCtm = (ws) => {
+    try {
+      if (ws && typeof ws.updateInverseScreenCTM === 'function') ws.updateInverseScreenCTM();
+    } catch (e) { /* ignore */ }
+  };
+
+  const workspaceXYToClient = (workspace, wx, wy) => {
+    refreshWsCtm(workspace);
+    try {
+      const svg = workspace.getParentSvg && workspace.getParentSvg();
+      const origin = workspace.getOriginOffsetInPixels && workspace.getOriginOffsetInPixels();
+      if (svg && origin && svg.createSVGPoint) {
+        const pt = svg.createSVGPoint();
+        pt.x = wx * workspace.scale + origin.x;
+        pt.y = wy * workspace.scale + origin.y;
+        const ctm = svg.getScreenCTM && svg.getScreenCTM();
+        if (ctm) {
+          const sp = pt.matrixTransform(ctm);
+          return { x: sp.x, y: sp.y };
+        }
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const div = workspace.getInjectionDiv && workspace.getInjectionDiv();
+      if (div && typeof div.getBoundingClientRect === 'function' && workspace.getOriginOffsetInPixels) {
+        const br = div.getBoundingClientRect();
+        const main = workspace.getOriginOffsetInPixels();
+        const cx = wx * workspace.scale + main.x;
+        const cy = wy * workspace.scale + main.y;
+        return { x: br.left + cx, y: br.top + cy };
+      }
+    } catch (e2) { /* fall through */ }
+    return { x: last.x, y: last.y };
+  };
+
+  const clientToWorkspace = (workspace, clientX, clientY) => {
+    refreshWsCtm(workspace);
+    try {
+      if (Blockly.browserEvents && typeof Blockly.browserEvents.mouseToSvg === 'function' &&
+          workspace.getParentSvg && workspace.getInverseScreenCTM) {
+        const svg = workspace.getParentSvg();
+        const pt = Blockly.browserEvents.mouseToSvg(
+          { clientX: clientX, clientY: clientY },
+          svg,
+          workspace.getInverseScreenCTM()
+        );
+        const origin = workspace.getOriginOffsetInPixels();
+        return {
+          x: (pt.x - origin.x) / workspace.scale,
+          y: (pt.y - origin.y) / workspace.scale
+        };
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const svg = workspace.getParentSvg && workspace.getParentSvg();
+      if (svg && workspace.getInverseScreenCTM) {
+        const pt = svg.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+        const svgPt = pt.matrixTransform(workspace.getInverseScreenCTM());
+        const origin = workspace.getOriginOffsetInPixels();
+        return {
+          x: (svgPt.x - origin.x) / workspace.scale,
+          y: (svgPt.y - origin.y) / workspace.scale
+        };
+      }
+    } catch (e2) { /* fall through */ }
+    try {
+      if (Blockly.utils && Blockly.utils.svgMath && Blockly.utils.svgMath.screenToWsCoordinates && Blockly.utils.Coordinate) {
+        const w = Blockly.utils.svgMath.screenToWsCoordinates(
+          workspace,
+          new Blockly.utils.Coordinate(clientX, clientY)
+        );
+        return { x: w.x, y: w.y };
+      }
+    } catch (e3) { /* fall through */ }
+    try {
+      const div = workspace.getInjectionDiv && workspace.getInjectionDiv();
+      if (div && workspace.getOriginOffsetInPixels) {
+        const br = div.getBoundingClientRect();
+        const main = workspace.getOriginOffsetInPixels();
+        return {
+          x: (clientX - br.left - main.x) / workspace.scale,
+          y: (clientY - br.top - main.y) / workspace.scale
+        };
+      }
+    } catch (e4) { /* fall through */ }
+    return { x: clientX, y: clientY };
+  };
+
+  const rectWorkspaceToScreen = (workspace, r) => {
+    const corners = [
+      workspaceXYToClient(workspace, r.left, r.top),
+      workspaceXYToClient(workspace, r.right, r.top),
+      workspaceXYToClient(workspace, r.right, r.bottom),
+      workspaceXYToClient(workspace, r.left, r.bottom)
+    ];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < corners.length; i++) {
+      const c = corners[i];
+      minX = Math.min(minX, c.x); minY = Math.min(minY, c.y);
+      maxX = Math.max(maxX, c.x); maxY = Math.max(maxY, c.y);
+    }
+    return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+  };
+
+  const removePivotViz = () => {
+    if (pivotVizSvg && pivotVizSvg.parentNode) pivotVizSvg.parentNode.removeChild(pivotVizSvg);
+    pivotVizSvg = null;
+  };
+
+  /** Pivot math matches scaleSelection: mean of root bbox centers; frozen overlay for debug. */
+  const showPivotViz = (workspace, blockList, pivotWs) => {
+    removePivotViz();
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2147483645;');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = 'Rotate pivot (mean of root bounding-box centers) and each root getBoundingRectangle() at rotate start';
+    svg.appendChild(title);
+
+    for (let i = 0; i < blockList.length; i++) {
+      let r;
+      try { r = blockList[i].getBoundingRectangle(); } catch (e) { continue; }
+      if (!r) continue;
+      const box = rectWorkspaceToScreen(workspace, r);
+      const hue = (i * 47 + 160) % 360;
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', box.x);
+      rect.setAttribute('y', box.y);
+      rect.setAttribute('width', box.w);
+      rect.setAttribute('height', box.h);
+      rect.setAttribute('fill', 'hsla(' + hue + ', 55%, 45%, 0.12)');
+      rect.setAttribute('stroke', 'hsl(' + hue + ', 55%, 38%)');
+      rect.setAttribute('stroke-width', '2');
+      rect.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(rect);
+      const lab = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      lab.setAttribute('x', box.x + 4);
+      lab.setAttribute('y', box.y + 14);
+      lab.setAttribute('fill', 'hsl(' + hue + ', 55%, 28%)');
+      lab.setAttribute('font-size', '12');
+      lab.setAttribute('font-family', 'system-ui,Segoe UI,sans-serif');
+      lab.textContent = 'stack ' + (i + 1);
+      svg.appendChild(lab);
+    }
+
+    const px = workspaceXYToClient(workspace, pivotWs.x, pivotWs.y);
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const arm = 14;
+    const hLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    hLine.setAttribute('x1', px.x - arm);
+    hLine.setAttribute('x2', px.x + arm);
+    hLine.setAttribute('y1', px.y);
+    hLine.setAttribute('y2', px.y);
+    hLine.setAttribute('stroke', ROT_ACCENT);
+    hLine.setAttribute('stroke-width', '2');
+    hLine.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(hLine);
+    const vLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    vLine.setAttribute('x1', px.x);
+    vLine.setAttribute('x2', px.x);
+    vLine.setAttribute('y1', px.y - arm);
+    vLine.setAttribute('y2', px.y + arm);
+    vLine.setAttribute('stroke', ROT_ACCENT);
+    vLine.setAttribute('stroke-width', '2');
+    vLine.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(vLine);
+    const circ = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circ.setAttribute('cx', px.x);
+    circ.setAttribute('cy', px.y);
+    circ.setAttribute('r', '7');
+    circ.setAttribute('fill', ROT_ACCENT);
+    circ.setAttribute('stroke', '#fff');
+    circ.setAttribute('stroke-width', '2');
+    circ.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(circ);
+    const cap = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    cap.setAttribute('x', px.x + 10);
+    cap.setAttribute('y', px.y - 10);
+    cap.setAttribute('fill', ROT_ACCENT);
+    cap.setAttribute('font-size', '12');
+    cap.setAttribute('font-weight', '600');
+    cap.setAttribute('font-family', 'system-ui,Segoe UI,sans-serif');
+    cap.textContent = 'pivot';
+    g.appendChild(cap);
+    const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    sub.setAttribute('x', px.x + 10);
+    sub.setAttribute('y', px.y + 6);
+    sub.setAttribute('fill', '#00695c');
+    sub.setAttribute('font-size', '11');
+    sub.setAttribute('font-family', 'ui-monospace,Consolas,monospace');
+    sub.textContent =
+      '(' + (Math.round(pivotWs.x * 100) / 100) + ', ' + (Math.round(pivotWs.y * 100) / 100) + ') ws';
+    g.appendChild(sub);
+    svg.appendChild(g);
+
+    document.body.appendChild(svg);
+    pivotVizSvg = svg;
+  };
+
+  document.addEventListener('mousemove', e => {
+    last.x = e.clientX;
+    last.y = e.clientY;
+    last.shiftKey = !!e.shiftKey;
+  }, true);
+  const syncShiftKeys = (e) => { last.shiftKey = !!e.shiftKey; };
+  document.addEventListener('keydown', syncShiftKeys, true);
+  document.addEventListener('keyup', syncShiftKeys, true);
+
+  const bboxCenterWs = (b) => {
+    if (!b || typeof b.getBoundingRectangle !== 'function') return null;
+    try {
+      const r = b.getBoundingRectangle();
+      if (!r) return null;
+      if (typeof r.left === 'number' && typeof r.right === 'number' &&
+          typeof r.top === 'number' && typeof r.bottom === 'number') {
+        return { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+      }
+      if (typeof r.left === 'number' && typeof r.top === 'number' &&
+          typeof r.width === 'number' && typeof r.height === 'number') {
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+    } catch (e) { /* skip */ }
+    return null;
+  };
+
+  const getPivotFromBboxCenters = (centerList) => {
+    let sumX = 0, sumY = 0, n = 0;
+    for (let i = 0; i < centerList.length; i++) {
+      const c = centerList[i];
+      if (!c) continue;
+      sumX += c.x;
+      sumY += c.y;
+      n++;
+    }
+    if (!n) return null;
+    return { x: sumX / n, y: sumY / n };
+  };
+
+  const computeAngleRad = (pWs) => {
+    const P = pivot;
+    const v0x = startMouseWs.x - P.x, v0y = startMouseWs.y - P.y;
+    const vx = pWs.x - P.x, vy = pWs.y - P.y;
+    const len0 = Math.hypot(v0x, v0y);
+    const len = Math.hypot(vx, vy);
+    if (len < EPS) return 0;
+    if (len0 < EPS) return 0;
+    let th = Math.atan2(vy, vx) - Math.atan2(v0y, v0x);
+    if (last.shiftKey) th *= getPreciseMouseFactor();
+    return th;
+  };
+
+  const reSnapshotRotateBaseline = () => {
+    const ws = blocks[0] && blocks[0].workspace;
+    if (!ws) return;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (!b || b.disposed) continue;
+      try {
+        if (typeof b.getRelativeToSurfaceXY === 'function') {
+          const p = b.getRelativeToSurfaceXY();
+          startPositions[i] = { x: p.x, y: p.y };
+        }
+        const c = bboxCenterWs(b);
+        startCenters[i] = c || startPositions[i];
+      } catch (e) { /* skip */ }
+    }
+    pivot = getPivotFromBboxCenters(startCenters);
+    if (!pivot) return;
+    try {
+      startMouseWs = clientToWorkspace(ws, last.x, last.y);
+    } catch (e1) { /* ignore */ }
+    const dx0 = startMouseWs.x - pivot.x, dy0 = startMouseWs.y - pivot.y;
+    if (Math.hypot(dx0, dy0) < EPS) {
+      startMouseWs = { x: pivot.x + EPS * 10, y: pivot.y };
+    }
+  };
+
+  /** Same anchor–center coupling as applyScale: rotate each root bbox center about P, then moveTo anchor by (C'−C0) so blocks orbit visually around centers, not connection points. */
+  const applyRotate = (thetaRad) => {
+    const P = pivot;
+    const c = Math.cos(thetaRad);
+    const s = Math.sin(thetaRad);
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      const A0 = startPositions[i];
+      const C0 = startCenters[i];
+      if (!block || block.disposed || !A0) continue;
+      const cx = C0 ? C0.x : A0.x;
+      const cy = C0 ? C0.y : A0.y;
+      const dcx = cx - P.x;
+      const dcy = cy - P.y;
+      const Cpx = P.x + dcx * c - dcy * s;
+      const Cpy = P.y + dcx * s + dcy * c;
+      const newX = A0.x + (Cpx - cx);
+      const newY = A0.y + (Cpy - cy);
+      try {
+        if (typeof block.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+          block.moveTo(new Blockly.utils.Coordinate(newX, newY));
+        }
+      } catch (e) { /* skip */ }
+      try {
+        if (block.addSelect) block.addSelect();
+      } catch (e2) { /* skip */ }
+    }
+  };
+
+  const formatAngleDeg = (rad) => {
+    if (!Number.isFinite(rad)) return '0';
+    const d = (rad * 180) / Math.PI;
+    const r = Math.round(d * 1e4) / 1e4;
+    return String(r);
+  };
+
+  const setAngleAndHud = (thetaRad) => {
+    if (!Number.isFinite(thetaRad)) return;
+    applyRotate(thetaRad);
+    lastAngleRad = thetaRad;
+    if (rotateHudInput && document.activeElement !== rotateHudInput) {
+      rotateHudInput.value = formatAngleDeg(thetaRad);
+    }
+  };
+
+  const moveHandler = () => {
+    if (!rotating) return;
+    if (rotateHudInput && document.activeElement === rotateHudInput) return;
+    const ws = blocks[0] && blocks[0].workspace;
+    if (!ws) return;
+    const pWs = clientToWorkspace(ws, last.x, last.y);
+    const th = computeAngleRad(pWs);
+    setAngleAndHud(th);
+  };
+
+  const removeRotateHud = () => {
+    hudCommitEnter = null;
+    if (rotateHudEl && rotateHudEl.parentNode) rotateHudEl.parentNode.removeChild(rotateHudEl);
+    rotateHudEl = null;
+    rotateHudInput = null;
+  };
+
+  const parseAngleText = (raw) => {
+    const t = String(raw || '').trim().replace(/°/g, '').replace(/deg/gi, '').trim();
+    if (t === '' || t === 'zero') return 0;
+    const n = parseFloat(String(t).replace(',', '.'));
+    return Number.isFinite(n) ? (n * Math.PI) / 180 : NaN;
+  };
+
+  const tryParseLiveAngle = (raw) => {
+    const t = String(raw || '').trim().replace(/°/g, '').replace(/deg/gi, '');
+    if (t === '' || t === '-' || t === '.' || t === ',') return null;
+    const n = parseFloat(String(t).replace(',', '.'));
+    return Number.isFinite(n) ? (n * Math.PI) / 180 : null;
+  };
+
+  const onRotateHudEnterKey = (e) => {
+    if (!rotating || !hudCommitEnter) return;
+    if (e.key !== 'Enter' && e.code !== 'NumpadEnter') return;
+    if (!rotateHudInput || document.activeElement !== rotateHudInput) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    hudCommitEnter();
+  };
+  window.addEventListener('keydown', onRotateHudEnterKey, true);
+
+  const onRotateHudEnterKeyUp = (e) => {
+    if (!rotating || !hudCommitEnter) return;
+    if (e.key !== 'Enter' && e.code !== 'NumpadEnter') return;
+    if (!rotateHudInput || document.activeElement !== rotateHudInput) return;
+    e.preventDefault();
+    e.stopPropagation();
+    hudCommitEnter();
+  };
+  window.addEventListener('keyup', onRotateHudEnterKeyUp, true);
+
+  const createRotateHud = () => {
+    removeRotateHud();
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'position:fixed;bottom:12px;left:12px;z-index:2147483648;display:flex;flex-direction:column;align-items:flex-start;gap:4px;' +
+      'font:12px/1.35 system-ui,Segoe UI,sans-serif;color:#eceff1;background:rgba(33,33,33,0.94);padding:8px 10px;border-radius:8px;' +
+      'box-shadow:0 2px 12px rgba(0,0,0,0.35);pointer-events:auto;max-width:min(96vw,300px);';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;';
+    const lab = document.createElement('label');
+    lab.textContent = 'Angle (°)';
+    lab.setAttribute('for', '__adamRotateDegInput');
+    lab.style.cssText = 'font-weight:600;color:#b0bec5;';
+    const input = document.createElement('input');
+    input.id = '__adamRotateDegInput';
+    input.type = 'text';
+    input.setAttribute('inputmode', 'decimal');
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.style.cssText =
+      'width:92px;padding:4px 8px;border:1px solid #546e7a;border-radius:4px;background:#263238;color:#eee;font:13px ui-monospace,Consolas,monospace;';
+    input.value = formatAngleDeg(lastAngleRad);
+    row.appendChild(lab);
+    row.appendChild(input);
+    wrap.appendChild(row);
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#90a4ae;line-height:1.35;';
+    hint.textContent = 'Enter commits. Drag or type degrees. Hold Shift for finer mouse rotation. Same pivot as scale (S).';
+    wrap.appendChild(hint);
+    document.body.appendChild(wrap);
+    rotateHudEl = wrap;
+    rotateHudInput = input;
+
+    const applyFromInput = () => {
+      if (!rotating) return;
+      const n = parseAngleText(input.value);
+      if (!Number.isFinite(n)) {
+        input.style.borderColor = '#c62828';
+        input.value = formatAngleDeg(lastAngleRad);
+        return;
+      }
+      input.style.borderColor = '#546e7a';
+      setAngleAndHud(n);
+      reSnapshotRotateBaseline();
+    };
+
+    hudCommitEnter = () => {
+      applyFromInput();
+      endRotate({ cancel: false });
+    };
+
+    const isAngleKeyAllowed = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        const c = e.key && e.key.toLowerCase();
+        if (c === 'a' || c === 'c' || c === 'v' || c === 'x' || c === 'z') return true;
+      }
+      const k = e.key;
+      if (k === 'Backspace' || k === 'Delete' || k === 'Tab' || k === 'Escape') return true;
+      if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown' || k === 'Home' || k === 'End') return true;
+      if (k >= '0' && k <= '9') return true;
+      if (k === '.' || k === ',') {
+        const val = input.value;
+        const ss = input.selectionStart != null ? input.selectionStart : 0;
+        const se = input.selectionEnd != null ? input.selectionEnd : 0;
+        const before = val.slice(0, ss);
+        const after = val.slice(se);
+        const combined = before + after;
+        if (combined.indexOf('.') >= 0 || combined.indexOf(',') >= 0) return false;
+        return true;
+      }
+      if (k === '-') {
+        const val = input.value;
+        const ss = input.selectionStart != null ? input.selectionStart : 0;
+        const se = input.selectionEnd != null ? input.selectionEnd : 0;
+        if (ss === 0 && !val.slice(0, se).includes('-')) return true;
+        return false;
+      }
+      if (k === '°') return true;
+      return false;
+    };
+
+    input.addEventListener('blur', () => {
+      applyFromInput();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        if (hudCommitEnter) hudCommitEnter();
+        return;
+      }
+      if (isAngleKeyAllowed(e)) return;
+      if (e.key && e.key.length === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+    input.addEventListener('input', () => {
+      const v = input.value.replace(/\u00B0/g, '').replace(/deg/gi, '');
+      const cleaned = v.replace(/[^0-9.,-]/g, '').replace(/(?!^)-/g, '');
+      let out = cleaned;
+      const sep = out.search(/[.,]/);
+      if (sep >= 0) {
+        const head = out.slice(0, sep + 1);
+        const tail = out.slice(sep + 1).replace(/[.,]/g, '');
+        out = head + tail;
+      }
+      if (out !== v) {
+        const ss = input.selectionStart;
+        input.value = out;
+        try {
+          if (ss != null) input.setSelectionRange(Math.min(ss, out.length), Math.min(ss, out.length));
+        } catch (err) { /* ignore */ }
+      }
+      const n = tryParseLiveAngle(input.value);
+      if (n !== null) {
+        input.style.borderColor = '#546e7a';
+        setAngleAndHud(n);
+      }
+    });
+  };
+
+  const isTypingTarget = (t) => {
+    if (rotateHudInput && (t === rotateHudInput || (rotateHudEl && rotateHudEl.contains && rotateHudEl.contains(t)))) return true;
+    return typeof window.__adamIsTypingTarget === 'function'
+      ? window.__adamIsTypingTarget(t)
+      : !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
+  };
+
+  const canStartRotate = () => {
+    if (window.__scaleSelectionScaling) return false;
+    if (!window.__multiSelectEnabled) return false;
+    if (typeof window.__multiSelectIsMultiDragging === 'function' && window.__multiSelectIsMultiDragging()) return false;
+    if (typeof window.__multiSelectIsLayoutModeActive === 'function' && window.__multiSelectIsLayoutModeActive()) return false;
+    if (window.__grabBlockDragging) return false;
+    if (typeof Blockly === 'undefined' || !Blockly.getMainWorkspace) return false;
+    const ws = Blockly.getMainWorkspace();
+    if (!ws || ws.options.readOnly) return false;
+    const getSafe = window.__multiSelectGetBlocksSafeForWorkspaceMove;
+    if (typeof getSafe !== 'function') return false;
+    return getSafe().length >= 2;
+  };
+
+  const shouldRouteNumericToRotateHud = (e) => {
+    if (!rotating || !rotateHudInput) return false;
+    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (e.repeat) return false;
+    const ae = document.activeElement;
+    if (ae === rotateHudInput || (rotateHudEl && rotateHudEl.contains && rotateHudEl.contains(ae))) return false;
+    const t = e.target;
+    if (t && t !== rotateHudInput) {
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return false;
+      if (typeof window.__adamIsTypingTarget === 'function' && window.__adamIsTypingTarget(t)) return false;
+    }
+    const k = e.key;
+    if (k >= '0' && k <= '9') return true;
+    if (k === '.' || k === ',') return true;
+    if (k === '-') return true;
+    return false;
+  };
+
+  const onRotateDirectNumeric = (e) => {
+    if (!shouldRouteNumericToRotateHud(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const k = e.key;
+    rotateHudInput.focus();
+    rotateHudInput.value = k === ',' ? ',' : k;
+    const len = rotateHudInput.value.length;
+    try {
+      rotateHudInput.setSelectionRange(len, len);
+    } catch (err) { /* ignore */ }
+    rotateHudInput.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  document.addEventListener('keydown', onRotateDirectNumeric, true);
+
+  const makeOverlay = () => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:transparent;cursor:crosshair;pointer-events:auto;';
+    const swallow = ev => { ev.preventDefault(); ev.stopPropagation(); };
+    ['click','dblclick','pointerup','mouseup','mousemove','wheel','contextmenu'].forEach(t => el.addEventListener(t, swallow, true));
+    el.addEventListener('pointerdown', e => {
+      if (!rotating) return;
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation?.();
+      const cancel = (e.button === 2 || e.which === 3);
+      endRotate({ cancel });
+    }, true);
+    document.body.appendChild(el);
+    return el;
+  };
+
+  const startRotate = () => {
+    if (window.__scaleSelectionScaling) {
+      console.warn('[Rotate] Scale session active.');
+      return;
+    }
+    if (!canStartRotate()) {
+      console.warn('[Rotate] Need 2+ movable top-level blocks, multi-select enabled, and idle editor.');
+      return;
+    }
+    const getSafe = window.__multiSelectGetBlocksSafeForWorkspaceMove;
+    blocks = getSafe().slice();
+    startPositions = blocks.map(b => {
+      if (b && typeof b.getRelativeToSurfaceXY === 'function') {
+        const p = b.getRelativeToSurfaceXY();
+        return { x: p.x, y: p.y };
+      }
+      return null;
+    });
+    startCenters = blocks.map((b, i) => {
+      const c = bboxCenterWs(b);
+      const sp = startPositions[i];
+      if (c) return c;
+      if (sp) return { x: sp.x, y: sp.y };
+      return null;
+    });
+    pivot = getPivotFromBboxCenters(startCenters);
+    if (!pivot) {
+      blocks = [];
+      console.warn('[Rotate] Could not compute pivot.');
+      return;
+    }
+    const ws = blocks[0].workspace;
+    if (!ws) {
+      blocks = [];
+      return;
+    }
+    startMouseWs = clientToWorkspace(ws, last.x, last.y);
+    const dx0 = startMouseWs.x - pivot.x, dy0 = startMouseWs.y - pivot.y;
+    if (Math.hypot(dx0, dy0) < EPS) {
+      startMouseWs = { x: pivot.x + EPS * 10, y: pivot.y };
+    }
+
+    if (window.__adamRotateHudDebug === true) {
+      try {
+        showPivotViz(ws, blocks, pivot);
+      } catch (err) {
+        console.debug('[Rotate] Pivot overlay failed:', err);
+      }
+    }
+
+    eventsWereEnabled = Blockly.Events.isEnabled();
+    if (eventsWereEnabled) Blockly.Events.disable();
+
+    rotating = true;
+    window.__rotateSelectionRotating = true;
+    overlay = makeOverlay();
+    suppressCtx = e => { e.preventDefault(); };
+    window.addEventListener('contextmenu', suppressCtx, true);
+
+    lastAngleRad = 0;
+    createRotateHud();
+    moveHandler();
+    moveProxy = moveHandler;
+    document.addEventListener('mousemove', moveProxy, true);
+
+    blocks.forEach(b => {
+      try { if (b.addSelect) b.addSelect(); } catch (e) {}
+    });
+
+    console.log('[Rotate] Drag to rotate about pivot (mean of root bbox centers). Shift = finer mouse · Enter or click to commit · Esc / RMB cancel · optional ° field.');
+  };
+
+  const endRotate = ({ cancel }) => {
+    if (!rotating) return;
+
+    const savedBlocks = blocks.slice();
+    const savedStarts = startPositions.slice();
+
+    if (moveProxy) document.removeEventListener('mousemove', moveProxy, true);
+    moveProxy = null;
+
+    rotating = false;
+    window.__rotateSelectionRotating = false;
+
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    overlay = null;
+    if (suppressCtx) window.removeEventListener('contextmenu', suppressCtx, true);
+    suppressCtx = null;
+
+    if (eventsWereEnabled) Blockly.Events.enable();
+    eventsWereEnabled = false;
+
+    if (cancel) {
+      const restoreAll = () => {
+        try {
+          savedBlocks.forEach((b, i) => {
+            const sp = savedStarts[i];
+            if (!b || b.disposed || !sp) return;
+            if (typeof b.moveTo === 'function' && Blockly?.utils?.Coordinate) {
+              b.moveTo(new Blockly.utils.Coordinate(sp.x, sp.y));
+            }
+          });
+          console.log('[Rotate] Cancelled — positions restored.');
+        } catch (e) {
+          console.debug('[Rotate] Restore failed:', e);
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(restoreAll));
+    } else {
+      const wasGrouped = Blockly.Events.getGroup();
+      Blockly.Events.setGroup(true);
+      try {
+        savedBlocks.forEach((b, i) => {
+          const sp = savedStarts[i];
+          if (!b || b.disposed || !sp || typeof b.getRelativeToSurfaceXY !== 'function') return;
+          const cur = b.getRelativeToSurfaceXY();
+          if (Math.abs(cur.x - sp.x) > 0.1 || Math.abs(cur.y - sp.y) > 0.1) {
+            if (Blockly.Events.BlockMove) {
+              const moveEvent = new Blockly.Events.BlockMove(b);
+              moveEvent.newCoordinate = new Blockly.utils.Coordinate(cur.x, cur.y);
+              moveEvent.oldCoordinate = new Blockly.utils.Coordinate(sp.x, sp.y);
+              Blockly.Events.fire(moveEvent);
+            }
+          }
+        });
+      } finally {
+        Blockly.Events.setGroup(wasGrouped);
+      }
+    }
+
+    blocks = [];
+    startPositions = [];
+    startCenters = [];
+    pivot = { x: 0, y: 0 };
+    removePivotViz();
+    removeRotateHud();
+
+    setTimeout(() => console.log('[Rotate] Ended.'), 0);
+  };
+
+  const onRotateEnterCommitSession = (e) => {
+    if (!rotating) return;
+    if (e.key !== 'Enter' && e.code !== 'NumpadEnter') return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (rotateHudInput && document.activeElement === rotateHudInput) return;
+    if (isTypingTarget(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    endRotate({ cancel: false });
+  };
+  window.addEventListener('keydown', onRotateEnterCommitSession, true);
+
+  document.addEventListener('keydown', e => {
+    if (e.key && e.key.toLowerCase() === 'r' && !rotating && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (window.__scaleSelectionScaling) return;
+      if (isTypingTarget(e.target)) return;
+      if (!canStartRotate()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      startRotate();
+      return;
+    }
+    if (e.key && e.key.toLowerCase() === 's' && rotating) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.key === 'Escape' && rotating) {
+      e.preventDefault();
+      e.stopPropagation();
+      endRotate({ cancel: true });
+    }
+  }, true);
+
+  window.addEventListener('blur', () => {
+    if (rotating) endRotate({ cancel: false });
+  });
+
+  window.__adamRotateSetHudDebug = function (on) {
+    window.__adamRotateHudDebug = !!on;
+    if (!rotating) return;
+    const ws = blocks[0] && blocks[0].workspace;
+    if (!ws || !pivot) return;
+    if (window.__adamRotateHudDebug === true) {
+      try {
+        showPivotViz(ws, blocks, pivot);
+      } catch (e) { /* ignore */ }
+    } else {
+      removePivotViz();
+    }
+  };
+
+  window.__rotateSelectionEnter = startRotate;
+})();`;
+}
+</script>

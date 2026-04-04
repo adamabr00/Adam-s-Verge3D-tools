@@ -1,0 +1,362 @@
+﻿<template color="#4a6d7a" prev="true" next="true"
+  tooltip="Ctrl+drag (Cmd on Mac) on empty workspace: stroke a path without panning; touching any block in a stack highlights that stack; order follows which stacks you touch; on release they chain with next/previous. Place after multiSelect in Master. Requires ?logic.">
+  <dummy>
+    <label>Chain stroke (Ctrl+drag)</label>
+  </dummy>
+</template>
+
+<script>
+function code(block) {
+  return `(function () {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('logic')) return;
+  if (window.__chainStrokeGestureInstalled) return;
+  window.__chainStrokeGestureInstalled = true;
+
+  const chainStrokeState = {
+    workspace: null,
+    ordered: [],
+    lastId: null,
+    lineSvg: null,
+    polyline: null,
+    points: [],
+    highlightSerial: 0
+  };
+
+  const refreshWsCtm = (ws) => {
+    try {
+      if (ws && typeof ws.updateInverseScreenCTM === 'function') ws.updateInverseScreenCTM();
+    } catch (e) { /* ignore */ }
+  };
+
+  const clientToWorkspace = (workspace, clientX, clientY) => {
+    refreshWsCtm(workspace);
+    try {
+      if (Blockly.browserEvents && typeof Blockly.browserEvents.mouseToSvg === 'function' &&
+          workspace.getParentSvg && workspace.getInverseScreenCTM) {
+        const svg = workspace.getParentSvg();
+        const pt = Blockly.browserEvents.mouseToSvg(
+          { clientX: clientX, clientY: clientY },
+          svg,
+          workspace.getInverseScreenCTM()
+        );
+        const origin = workspace.getOriginOffsetInPixels();
+        return {
+          x: (pt.x - origin.x) / workspace.scale,
+          y: (pt.y - origin.y) / workspace.scale
+        };
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      if (Blockly.utils && Blockly.utils.svgMath && Blockly.utils.svgMath.screenToWsCoordinates && Blockly.utils.Coordinate) {
+        const w = Blockly.utils.svgMath.screenToWsCoordinates(
+          workspace,
+          new Blockly.utils.Coordinate(clientX, clientY)
+        );
+        return { x: w.x, y: w.y };
+      }
+    } catch (e2) { /* fall through */ }
+    try {
+      const div = workspace.getInjectionDiv && workspace.getInjectionDiv();
+      if (div && workspace.getOriginOffsetInPixels) {
+        const br = div.getBoundingClientRect();
+        const main = workspace.getOriginOffsetInPixels();
+        return {
+          x: (clientX - br.left - main.x) / workspace.scale,
+          y: (clientY - br.top - main.y) / workspace.scale
+        };
+      }
+    } catch (e3) { /* fall through */ }
+    return { x: clientX, y: clientY };
+  };
+
+  const isStatementHitCandidate = (b) => {
+    if (!b || b.disposed || b.isShadow() || b.isInsertionMarker()) return false;
+    try {
+      if (b.isInFlyout && b.isInFlyout()) return false;
+    } catch (e) { /* ignore */ }
+    if (b.outputConnection && !b.previousConnection && !b.nextConnection) return false;
+    if (!b.previousConnection && !b.nextConnection) return false;
+    return true;
+  };
+
+  const getStatementStackBlocks = (root) => {
+    const out = [];
+    let b = root;
+    const seen = {};
+    while (b && !seen[b.id]) {
+      seen[b.id] = true;
+      out.push(b);
+      b = b.getNextBlock ? b.getNextBlock() : null;
+    }
+    return out;
+  };
+
+  const pointInRectWs = (wx, wy, r) => {
+    if (!r || typeof r.left !== 'number') return false;
+    const left = r.left;
+    const right = typeof r.right === 'number' ? r.right : r.left + (r.width || 0);
+    const top = r.top;
+    const bottom = typeof r.bottom === 'number' ? r.bottom : r.top + (r.height || 0);
+    return wx >= left && wx <= right && wy >= top && wy <= bottom;
+  };
+
+  const hitTestStatementBlockAt = (workspace, wx, wy) => {
+    const all = workspace.getAllBlocks(false);
+    let best = null;
+    let bestArea = Infinity;
+    for (let i = 0; i < all.length; i++) {
+      const b = all[i];
+      if (!isStatementHitCandidate(b)) continue;
+      let r;
+      try {
+        r = b.getBoundingRectangle();
+      } catch (e) {
+        continue;
+      }
+      if (!r || !pointInRectWs(wx, wy, r)) continue;
+      try {
+        const area = (r.right - r.left) * (r.bottom - r.top);
+        if (area < bestArea) {
+          bestArea = area;
+          best = b;
+        }
+      } catch (e2) {
+        best = b;
+        break;
+      }
+    }
+    return best;
+  };
+
+  const removeStrokeLine = () => {
+    if (chainStrokeState.lineSvg && chainStrokeState.lineSvg.parentNode) {
+      chainStrokeState.lineSvg.parentNode.removeChild(chainStrokeState.lineSvg);
+    }
+    chainStrokeState.lineSvg = null;
+    chainStrokeState.polyline = null;
+    chainStrokeState.points = [];
+  };
+
+  const ensureStrokeLine = () => {
+    if (chainStrokeState.lineSvg) return;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2147483640;');
+    const pl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    pl.setAttribute('fill', 'none');
+    pl.setAttribute('stroke', '#5c6bc0');
+    pl.setAttribute('stroke-width', '2');
+    pl.setAttribute('stroke-linecap', 'round');
+    pl.setAttribute('stroke-linejoin', 'round');
+    pl.setAttribute('opacity', '0.85');
+    svg.appendChild(pl);
+    document.body.appendChild(svg);
+    chainStrokeState.lineSvg = svg;
+    chainStrokeState.polyline = pl;
+  };
+
+  const appendPoint = (clientX, clientY) => {
+    chainStrokeState.points.push({ x: clientX, y: clientY });
+    if (!chainStrokeState.polyline) return;
+    const s = chainStrokeState.points.map((p) => p.x + ',' + p.y).join(' ');
+    chainStrokeState.polyline.setAttribute('points', s);
+  };
+
+  const clearStrokeHighlights = () => {
+    const ws = chainStrokeState.workspace;
+    if (ws && typeof ws.highlightBlock === 'function') {
+      try {
+        ws.highlightBlock(null);
+      } catch (e) { /* ignore */ }
+    }
+  };
+
+  const resetChainSession = () => {
+    clearStrokeHighlights();
+    chainStrokeState.workspace = null;
+    chainStrokeState.ordered = [];
+    chainStrokeState.lastId = null;
+    chainStrokeState.highlightSerial = 0;
+    removeStrokeLine();
+  };
+
+  const highlightStatementStackForStroke = (root) => {
+    if (!root || root.disposed) return;
+    const hws = root.workspace;
+    if (!hws || typeof hws.highlightBlock !== 'function') return;
+    const stackBlocks = getStatementStackBlocks(root);
+    for (let i = 0; i < stackBlocks.length; i++) {
+      const blk = stackBlocks[i];
+      if (!blk || blk.disposed) continue;
+      chainStrokeState.highlightSerial++;
+      try {
+        if (chainStrokeState.highlightSerial === 1) {
+          hws.highlightBlock(blk.id);
+        } else {
+          hws.highlightBlock(blk.id, true);
+        }
+      } catch (eh) { /* ignore */ }
+    }
+  };
+
+  const onChainStrokeMove = (gesture, e) => {
+    const ws = chainStrokeState.workspace || gesture.startWorkspace_;
+    if (!ws) return;
+    const wpt = clientToWorkspace(ws, e.clientX, e.clientY);
+    const hit = hitTestStatementBlockAt(ws, wpt.x, wpt.y);
+    appendPoint(e.clientX, e.clientY);
+    let root = null;
+    try {
+      root = hit && hit.getRootBlock ? hit.getRootBlock() : null;
+    } catch (er) { /* ignore */ }
+    if (root && root.id !== chainStrokeState.lastId) {
+      chainStrokeState.lastId = root.id;
+      chainStrokeState.ordered.push(root);
+      highlightStatementStackForStroke(root);
+    }
+  };
+
+  const tryConnectPair = (a, b) => {
+    if (!a || !b || a.disposed || b.disposed) return false;
+    const next = a.nextConnection;
+    const prev = b.previousConnection;
+    if (!next || !prev) return false;
+    try {
+      if (next.targetBlock && next.targetBlock() === b) return true;
+    } catch (e0) { /* ignore */ }
+    const checker = a.workspace && a.workspace.connectionChecker;
+    if (checker) {
+      try {
+        if (typeof checker.canConnect === 'function' && !checker.canConnect(next, prev, false)) return false;
+      } catch (e1) { /* ignore */ }
+    }
+    try {
+      if (b.getRootBlock && a.getRootBlock && b.getRootBlock() === a.getRootBlock()) {
+        return false;
+      }
+    } catch (e2) { /* ignore */ }
+    try {
+      b.unplug(false);
+    } catch (e3) { /* ignore */ }
+    try {
+      if (next.isConnected && next.isConnected()) {
+        const t = next.targetBlock();
+        if (t && t !== b) next.disconnect();
+      }
+      if (prev.isConnected && prev.isConnected()) prev.disconnect();
+    } catch (e4) { /* ignore */ }
+    try {
+      return next.connect(prev);
+    } catch (e5) {
+      console.warn('[ChainStroke] connect failed:', e5);
+      return false;
+    }
+  };
+
+  const connectOrderedBlocks = (blocks) => {
+    if (!blocks || blocks.length < 2) return;
+    const wasGrouped = Blockly.Events.getGroup();
+    Blockly.Events.setGroup(true);
+    try {
+      for (let i = 0; i < blocks.length - 1; i++) {
+        tryConnectPair(blocks[i], blocks[i + 1]);
+      }
+    } finally {
+      Blockly.Events.setGroup(wasGrouped);
+    }
+  };
+
+  const onChainStrokeStart = (gesture) => {
+    resetChainSession();
+    chainStrokeState.workspace = gesture.startWorkspace_;
+    ensureStrokeLine();
+    const md = gesture.mouseDownXY_;
+    if (md) appendPoint(md.x, md.y);
+  };
+
+  const onChainStrokeEnd = (gesture, e) => {
+    onChainStrokeMove(gesture, e);
+    connectOrderedBlocks(chainStrokeState.ordered);
+    resetChainSession();
+  };
+
+  const onChainStrokeCancel = () => {
+    resetChainSession();
+  };
+
+  const prevDoStart = Blockly.Gesture.prototype.doStart;
+  Blockly.Gesture.prototype.doStart = function (e) {
+    this.__ctrlEmptyChainStroke_ = !!(
+      (e.ctrlKey || e.metaKey) &&
+      !e.shiftKey &&
+      !this.targetBlock_ &&
+      !this.flyout_
+    );
+    return prevDoStart.call(this, e);
+  };
+
+  const prevUpdateIsDraggingWorkspace = Blockly.Gesture.prototype.updateIsDraggingWorkspace_;
+  Blockly.Gesture.prototype.updateIsDraggingWorkspace_ = function () {
+    if (
+      this.__ctrlEmptyChainStroke_ &&
+      this.startWorkspace_ &&
+      !this.flyout_ &&
+      !this.targetBlock_ &&
+      !this.startWorkspace_.options.readOnly
+    ) {
+      this.isCtrlChainStroke_ = true;
+      onChainStrokeStart(this);
+      return;
+    }
+    return prevUpdateIsDraggingWorkspace.call(this);
+  };
+
+  const prevGestureHandleMove = Blockly.Gesture.prototype.handleMove;
+  Blockly.Gesture.prototype.handleMove = function (e) {
+    if (this.isCtrlChainStroke_) {
+      this.updateFromEvent_(e);
+      onChainStrokeMove(this, e);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    return prevGestureHandleMove.call(this, e);
+  };
+
+  const prevGestureHandleUp = Blockly.Gesture.prototype.handleUp;
+  Blockly.Gesture.prototype.handleUp = function (e) {
+    if (this.isCtrlChainStroke_) {
+      this.updateFromEvent_(e);
+      if (Blockly.Touch) Blockly.Touch.longStop();
+      if (this.isEnding_) {
+        return;
+      }
+      this.isEnding_ = true;
+      onChainStrokeEnd(this, e);
+      e.preventDefault();
+      e.stopPropagation();
+      this.dispose();
+      return;
+    }
+    return prevGestureHandleUp.call(this, e);
+  };
+
+  const prevGestureCancel = Blockly.Gesture.prototype.cancel;
+  Blockly.Gesture.prototype.cancel = function () {
+    if (this.isEnding_) {
+      return;
+    }
+    if (this.isCtrlChainStroke_) {
+      if (Blockly.Touch) Blockly.Touch.longStop();
+      onChainStrokeCancel();
+      this.isEnding_ = true;
+      this.dispose();
+      return;
+    }
+    return prevGestureCancel.call(this);
+  };
+
+  console.log('[ChainStroke] Ctrl+drag (Cmd on Mac) on empty workspace to chain statement blocks in stroke order. Place this puzzle after multiSelect.');
+})();`;
+}
+</script>

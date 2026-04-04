@@ -1,5 +1,5 @@
 <template color="#495d85" prev="true" next="true" 
-  tooltip="Enable multi-selection: Shift+Click, Shift+drag / Ctrl+B box select, G multi-drag, X delete. With Keyboard Shortcuts: Shift+D duplicates 2+ top-level stacks at once. Ctrl+Q/Shift+Q align preview; Ctrl+E/Shift+E spacing; Esc cancels layout.">
+  tooltip="Enable multi-selection: Shift+Click, Shift+drag / Ctrl+B box select, C circle select (wheel size, hold LMB and drag to add blocks under the brush without clearing prior selection, hold MMB drag to subtract, Esc/RMB/C exit), G multi-drag (X/Y/Z axis lock, Z same as Y; hold Ctrl: bbox snap + dashed guides like single G-drag), X delete. Add the Chain stroke puzzle after this block for Ctrl+drag on empty workspace to chain statement blocks in stroke order. Alt+C with Keyboard Shortcuts: collapse/expand; 2+ blocks — bulk collapse/expand all. Alt+A clears multi-selection and primary selection when anything is selected. Shift+A remains Add Menu search. Ctrl+Q/Shift+Q align preview; Ctrl+E/Shift+E spacing; Esc cancels layout.">
   <dummy><label>Enable Multi-Selection</label></dummy>
 </template>
 
@@ -238,16 +238,309 @@ function code(block) {
     lastMousePos.x = e.clientX; 
     lastMousePos.y = e.clientY; 
   }, true);
+
+  // Fallback if grabBlock puzzle is not loaded — same API as grabBlock (G-drag bbox snap + guide metadata).
+  if (typeof window.__adamGDragBboxSnapDelta !== 'function') {
+    window.__adamGDragBboxSnapDelta = function (opts) {
+      var empty = { dx: 0, dy: 0, guideX: null, guideY: null };
+      var ws = opts.workspace;
+      if (!ws || !opts.ctrlEnable) return empty;
+      var thresholdPx = (typeof window.__adamGDragSnapThresholdPx === 'number' && window.__adamGDragSnapThresholdPx > 0)
+        ? window.__adamGDragSnapThresholdPx : 8;
+      var thresholdWs = thresholdPx / (ws.scale || 1);
+      var start = opts.selectionRectStart;
+      if (!start || typeof start.left !== 'number') return empty;
+      var d = opts.deltaWs || { x: 0, y: 0 };
+      var proposed = {
+        left: start.left + d.x,
+        right: start.right + d.x,
+        top: start.top + d.y,
+        bottom: start.bottom + d.y
+      };
+      var ids = opts.movingRootIds || [];
+      var idSet = {};
+      for (var ii = 0; ii < ids.length; ii++) idSet[ids[ii]] = true;
+      var tx = [];
+      var txKinds = [];
+      var ty = [];
+      var tyKinds = [];
+      var tops = typeof ws.getTopBlocks === 'function' ? ws.getTopBlocks(true) : [];
+      for (var jj = 0; jj < tops.length; jj++) {
+        var bb = tops[jj];
+        if (!bb || bb.isInFlyout || idSet[bb.id]) continue;
+        if (typeof bb.getBoundingRectangle !== 'function') continue;
+        var br = bb.getBoundingRectangle();
+        tx.push(br.left, br.right, (br.left + br.right) / 2);
+        txKinds.push('left', 'right', 'center');
+        ty.push(br.top, br.bottom, (br.top + br.bottom) / 2);
+        tyKinds.push('top', 'bottom', 'center');
+      }
+      var axis = opts.axisMode || 'both';
+      var sx = [proposed.left, proposed.right, (proposed.left + proposed.right) / 2];
+      var selXK = ['left', 'right', 'center'];
+      var sy = [proposed.top, proposed.bottom, (proposed.top + proposed.bottom) / 2];
+      var selYK = ['top', 'bottom', 'center'];
+      var best1D = function (sel, selKinds, tgt, tgtKinds, th) {
+        var bestD = 0;
+        var bestAbs = Infinity;
+        var ba = -1;
+        var bc = -1;
+        for (var a = 0; a < sel.length; a++) {
+          for (var c = 0; c < tgt.length; c++) {
+            var delta = tgt[c] - sel[a];
+            var ad = Math.abs(delta);
+            if (ad <= th && ad < bestAbs - 1e-9) {
+              bestD = delta;
+              bestAbs = ad;
+              ba = a;
+              bc = c;
+            }
+          }
+        }
+        if (bestAbs > th || ba < 0) return { delta: 0, guide: null };
+        return {
+          delta: bestD,
+          guide: { linePos: tgt[bc], sel: selKinds[ba], tgt: tgtKinds[bc], selVal: sel[ba], tgtVal: tgt[bc] }
+        };
+      };
+      var rx = { delta: 0, guide: null };
+      var ry = { delta: 0, guide: null };
+      if (axis === 'both' || axis === 'x') rx = best1D(sx, selXK, tx, txKinds, thresholdWs);
+      if (axis === 'both' || axis === 'y') ry = best1D(sy, selYK, ty, tyKinds, thresholdWs);
+      return { dx: rx.delta, dy: ry.delta, guideX: rx.guide, guideY: ry.guide };
+    };
+  }
+
+  let bboxSnapGuideMultiRef = null;
+
+  const removeBboxSnapGuideMulti = () => {
+    const g = bboxSnapGuideMultiRef;
+    if (g && g.svg && g.svg.parentNode) g.svg.parentNode.removeChild(g.svg);
+    bboxSnapGuideMultiRef = null;
+  };
+
+  const updateBboxSnapGuideMulti = (workspace, snapResult) => {
+    if (!snapResult || (!snapResult.guideX && !snapResult.guideY)) {
+      if (bboxSnapGuideMultiRef) bboxSnapGuideMultiRef.svg.style.display = 'none';
+      return;
+    }
+    if (!bboxSnapGuideMultiRef) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2147483645;');
+      const lineVX = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      lineVX.setAttribute('stroke', '#7e57c2');
+      lineVX.setAttribute('stroke-width', '2');
+      lineVX.setAttribute('stroke-dasharray', '6 4');
+      lineVX.setAttribute('vector-effect', 'non-scaling-stroke');
+      const lineHY = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      lineHY.setAttribute('stroke', '#00897b');
+      lineHY.setAttribute('stroke-width', '2');
+      lineHY.setAttribute('stroke-dasharray', '6 4');
+      lineHY.setAttribute('vector-effect', 'non-scaling-stroke');
+      const caption = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      caption.setAttribute('fill', '#37474f');
+      caption.setAttribute('font-size', '12');
+      caption.setAttribute('font-family', 'system-ui,Segoe UI,sans-serif');
+      caption.setAttribute('text-shadow', '0 0 4px #fff,0 0 8px #fff');
+      caption.setAttribute('x', '10');
+      caption.setAttribute('y', '0');
+      svg.appendChild(lineVX);
+      svg.appendChild(lineHY);
+      svg.appendChild(caption);
+      document.body.appendChild(svg);
+      bboxSnapGuideMultiRef = { svg, lineVX, lineHY, caption };
+    }
+    const g = bboxSnapGuideMultiRef;
+    g.svg.style.display = 'block';
+    const span = 100000;
+    try {
+      if (snapResult.guideX) {
+        const xw = snapResult.guideX.linePos;
+        const a = workspaceXYToClientMulti(workspace, xw, -span);
+        const b = workspaceXYToClientMulti(workspace, xw, span);
+        g.lineVX.setAttribute('x1', a.x); g.lineVX.setAttribute('y1', a.y);
+        g.lineVX.setAttribute('x2', b.x); g.lineVX.setAttribute('y2', b.y);
+        g.lineVX.style.display = '';
+      } else g.lineVX.style.display = 'none';
+      if (snapResult.guideY) {
+        const yw = snapResult.guideY.linePos;
+        const c = workspaceXYToClientMulti(workspace, -span, yw);
+        const d = workspaceXYToClientMulti(workspace, span, yw);
+        g.lineHY.setAttribute('x1', c.x); g.lineHY.setAttribute('y1', c.y);
+        g.lineHY.setAttribute('x2', d.x); g.lineHY.setAttribute('y2', d.y);
+        g.lineHY.style.display = '';
+      } else g.lineHY.style.display = 'none';
+      const parts = [];
+      if (snapResult.guideX) {
+        parts.push('X: selection ' + snapResult.guideX.sel + ' → target ' + snapResult.guideX.tgt + ' @ x=' + snapResult.guideX.linePos.toFixed(1) + ' ws');
+      }
+      if (snapResult.guideY) {
+        parts.push('Y: selection ' + snapResult.guideY.sel + ' → target ' + snapResult.guideY.tgt + ' @ y=' + snapResult.guideY.linePos.toFixed(1) + ' ws');
+      }
+      g.caption.textContent = parts.join('  |  ');
+      const h = typeof window.innerHeight === 'number' ? window.innerHeight : 600;
+      g.caption.setAttribute('y', String(h - 14));
+    } catch (e) {
+      if (bboxSnapGuideMultiRef) bboxSnapGuideMultiRef.svg.style.display = 'none';
+    }
+  };
   
   let multiDragState = {
     dragging: false,
     blocks: [],
     startPositions: [],
+    bboxUnionStart: null,
     startMousePos: null,
     overlay: null,
     moveHandler: null,
     suppressCtx: null,
-    eventsWereEnabled: false
+    eventsWereEnabled: false,
+    axisLocked: false,
+    axisMode: 'h',
+    axisLockLine: { x: 0, y: 0 },
+    axisOriginClient: null,
+    dragStartClient: null,
+    lastClient: null,
+    lastSegment: { dx: 0, dy: 0 },
+    lastMmbDownTs: 0,
+    axisGuideSvg: null
+  };
+
+  const refreshWsCtmMulti = (ws) => {
+    try {
+      if (ws && typeof ws.updateInverseScreenCTM === 'function') ws.updateInverseScreenCTM();
+    } catch (e) { /* ignore */ }
+  };
+
+  const workspaceXYToClientMulti = (workspace, wx, wy) => {
+    refreshWsCtmMulti(workspace);
+    try {
+      const svg = workspace.getParentSvg && workspace.getParentSvg();
+      const origin = workspace.getOriginOffsetInPixels && workspace.getOriginOffsetInPixels();
+      if (svg && origin && svg.createSVGPoint) {
+        const pt = svg.createSVGPoint();
+        pt.x = wx * workspace.scale + origin.x;
+        pt.y = wy * workspace.scale + origin.y;
+        const ctm = svg.getScreenCTM && svg.getScreenCTM();
+        if (ctm) {
+          const sp = pt.matrixTransform(ctm);
+          return { x: sp.x, y: sp.y };
+        }
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const div = workspace.getInjectionDiv && workspace.getInjectionDiv();
+      if (div && typeof div.getBoundingClientRect === 'function' && workspace.getOriginOffsetInPixels) {
+        const br = div.getBoundingClientRect();
+        const main = workspace.getOriginOffsetInPixels();
+        const cx = wx * workspace.scale + main.x;
+        const cy = wy * workspace.scale + main.y;
+        return { x: br.left + cx, y: br.top + cy };
+      }
+    } catch (e2) { /* fall through */ }
+    return { x: lastMousePos.x, y: lastMousePos.y };
+  };
+
+  const clientToWorkspaceMulti = (workspace, clientX, clientY) => {
+    refreshWsCtmMulti(workspace);
+    try {
+      if (Blockly.browserEvents && typeof Blockly.browserEvents.mouseToSvg === 'function' &&
+          workspace.getParentSvg && workspace.getInverseScreenCTM) {
+        const svg = workspace.getParentSvg();
+        const pt = Blockly.browserEvents.mouseToSvg(
+          { clientX: clientX, clientY: clientY },
+          svg,
+          workspace.getInverseScreenCTM()
+        );
+        const origin = workspace.getOriginOffsetInPixels();
+        return {
+          x: (pt.x - origin.x) / workspace.scale,
+          y: (pt.y - origin.y) / workspace.scale
+        };
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const svg = workspace.getParentSvg && workspace.getParentSvg();
+      if (svg && workspace.getInverseScreenCTM) {
+        const pt = svg.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+        const svgPt = pt.matrixTransform(workspace.getInverseScreenCTM());
+        const origin = workspace.getOriginOffsetInPixels();
+        return {
+          x: (svgPt.x - origin.x) / workspace.scale,
+          y: (svgPt.y - origin.y) / workspace.scale
+        };
+      }
+    } catch (e2) { /* fall through */ }
+    try {
+      if (Blockly.utils && Blockly.utils.svgMath && Blockly.utils.svgMath.screenToWsCoordinates && Blockly.utils.Coordinate) {
+        const w = Blockly.utils.svgMath.screenToWsCoordinates(
+          workspace,
+          new Blockly.utils.Coordinate(clientX, clientY)
+        );
+        return { x: w.x, y: w.y };
+      }
+    } catch (e3) { /* fall through */ }
+    try {
+      const div = workspace.getInjectionDiv && workspace.getInjectionDiv();
+      if (div && workspace.getOriginOffsetInPixels) {
+        const br = div.getBoundingClientRect();
+        const main = workspace.getOriginOffsetInPixels();
+        return {
+          x: (clientX - br.left - main.x) / workspace.scale,
+          y: (clientY - br.top - main.y) / workspace.scale
+        };
+      }
+    } catch (e4) { /* fall through */ }
+    return { x: clientX, y: clientY };
+  };
+
+  const removeAxisGuideMulti = () => {
+    const g = multiDragState.axisGuideSvg;
+    if (g && g.svg && g.svg.parentNode) g.svg.parentNode.removeChild(g.svg);
+    multiDragState.axisGuideSvg = null;
+  };
+
+  const ensureAxisGuideMulti = () => {
+    if (multiDragState.axisGuideSvg) return;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2147483646;');
+    const lineH = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    lineH.setAttribute('stroke', '#e53935');
+    lineH.setAttribute('stroke-width', '2');
+    lineH.setAttribute('vector-effect', 'non-scaling-stroke');
+    const lineV = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    lineV.setAttribute('stroke', '#2e7d32');
+    lineV.setAttribute('stroke-width', '2');
+    lineV.setAttribute('vector-effect', 'non-scaling-stroke');
+    svg.appendChild(lineH);
+    svg.appendChild(lineV);
+    document.body.appendChild(svg);
+    multiDragState.axisGuideSvg = { svg, lineH, lineV };
+  };
+
+  const updateAxisGuideMulti = () => {
+    if (!multiDragState.dragging) return;
+    if (!multiDragState.axisLocked) {
+      if (multiDragState.axisGuideSvg) multiDragState.axisGuideSvg.svg.style.display = 'none';
+      return;
+    }
+    ensureAxisGuideMulti();
+    const g = multiDragState.axisGuideSvg;
+    g.svg.style.display = 'block';
+    const w = window.innerWidth, h = window.innerHeight;
+    if (multiDragState.axisMode === 'h') {
+      g.lineH.setAttribute('x1', 0); g.lineH.setAttribute('x2', w);
+      g.lineH.setAttribute('y1', multiDragState.axisLockLine.y); g.lineH.setAttribute('y2', multiDragState.axisLockLine.y);
+      g.lineH.style.display = '';
+      g.lineV.style.display = 'none';
+    } else {
+      g.lineV.setAttribute('y1', 0); g.lineV.setAttribute('y2', h);
+      g.lineV.setAttribute('x1', multiDragState.axisLockLine.x); g.lineV.setAttribute('x2', multiDragState.axisLockLine.x);
+      g.lineV.style.display = '';
+      g.lineH.style.display = 'none';
+    }
   };
   
   const makeMultiDragOverlay = () => {
@@ -273,6 +566,8 @@ function code(block) {
   };
   
   const startMultiDrag = (e) => {
+    if (window.__scaleSelectionScaling) return;
+    if (window.__rotateSelectionRotating) return;
     const multi = window.__multiSelectedBlocks || [];
     if (multi.length < 2) {
       // Let grabBlock handle single block drag
@@ -294,6 +589,27 @@ function code(block) {
       }
       return null;
     });
+
+    multiDragState.bboxUnionStart = null;
+    try {
+      let u = null;
+      for (let bi = 0; bi < blocksToDrag.length; bi++) {
+        const blk = blocksToDrag[bi];
+        if (!blk || typeof blk.getBoundingRectangle !== 'function') continue;
+        const r = blk.getBoundingRectangle();
+        const o = { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        if (!u) u = o;
+        else {
+          u.left = Math.min(u.left, o.left);
+          u.right = Math.max(u.right, o.right);
+          u.top = Math.min(u.top, o.top);
+          u.bottom = Math.max(u.bottom, o.bottom);
+        }
+      }
+      multiDragState.bboxUnionStart = u;
+    } catch (eU) {
+      multiDragState.bboxUnionStart = null;
+    }
     
     // Get workspace to convert screen coordinates
     const workspace = blocksToDrag[0].workspace;
@@ -303,24 +619,25 @@ function code(block) {
     const mouseX = e ? e.clientX : lastMousePos.x;
     const mouseY = e ? e.clientY : lastMousePos.y;
     
-    // Store starting mouse position in workspace coordinates
-    const svg = workspace.getParentSvg();
-    const ctm = svg.getScreenCTM();
-    if (ctm) {
-      const pt = svg.createSVGPoint();
-      pt.x = mouseX;
-      pt.y = mouseY;
-      const svgPt = pt.matrixTransform(ctm.inverse());
-      const origin = workspace.getOriginOffsetInPixels();
-      multiDragState.startMousePos = {
-        x: (svgPt.x - origin.x) / workspace.scale,
-        y: (svgPt.y - origin.y) / workspace.scale
-      };
-    } else {
-      multiDragState.startMousePos = { x: mouseX, y: mouseY };
-    }
+    multiDragState.startMousePos = clientToWorkspaceMulti(workspace, mouseX, mouseY);
     
     multiDragState.dragging = true;
+    multiDragState.axisLocked = false;
+    multiDragState.dragStartClient = { x: mouseX, y: mouseY };
+    multiDragState.lastClient = { x: mouseX, y: mouseY };
+    multiDragState.lastSegment = { dx: 0, dy: 0 };
+    const sp0 = multiDragState.startPositions[0];
+    try {
+      if (sp0) {
+        multiDragState.axisOriginClient = workspaceXYToClientMulti(workspace, sp0.x, sp0.y);
+      } else {
+        multiDragState.axisOriginClient = { x: mouseX, y: mouseY };
+      }
+    } catch (err) {
+      multiDragState.axisOriginClient = { x: mouseX, y: mouseY };
+    }
+    removeAxisGuideMulti();
+    removeBboxSnapGuideMulti();
     
     // Disable events during drag to avoid firing hundreds of move events
     const eventsWereEnabled = Blockly.Events.isEnabled();
@@ -331,28 +648,49 @@ function code(block) {
     // Handle mouse movement
     multiDragState.moveHandler = (moveEvent) => {
       if (!multiDragState.dragging) return;
-      
-      const workspace = multiDragState.blocks[0].workspace;
-      const svg = workspace.getParentSvg();
-      const ctm = svg.getScreenCTM();
-      
-      let currentMousePos;
-      if (ctm) {
-        const pt = svg.createSVGPoint();
-        pt.x = moveEvent.clientX;
-        pt.y = moveEvent.clientY;
-        const svgPt = pt.matrixTransform(ctm.inverse());
-        const origin = workspace.getOriginOffsetInPixels();
-        currentMousePos = {
-          x: (svgPt.x - origin.x) / workspace.scale,
-          y: (svgPt.y - origin.y) / workspace.scale
+
+      const lc = multiDragState.lastClient;
+      if (lc) {
+        multiDragState.lastSegment = {
+          dx: moveEvent.clientX - lc.x,
+          dy: moveEvent.clientY - lc.y
         };
-      } else {
-        currentMousePos = { x: moveEvent.clientX, y: moveEvent.clientY };
+        multiDragState.lastClient = { x: moveEvent.clientX, y: moveEvent.clientY };
       }
       
-      const deltaX = currentMousePos.x - multiDragState.startMousePos.x;
-      const deltaY = currentMousePos.y - multiDragState.startMousePos.y;
+      const workspace = multiDragState.blocks[0].workspace;
+      const currentMousePos = clientToWorkspaceMulti(workspace, moveEvent.clientX, moveEvent.clientY);
+      
+      let deltaX = currentMousePos.x - multiDragState.startMousePos.x;
+      let deltaY = currentMousePos.y - multiDragState.startMousePos.y;
+      if (multiDragState.axisLocked) {
+        if (multiDragState.axisMode === 'h') deltaY = 0;
+        else deltaX = 0;
+      }
+
+      let axisSnap = 'both';
+      if (multiDragState.axisLocked) axisSnap = multiDragState.axisMode === 'h' ? 'x' : 'y';
+      if (multiDragState.bboxUnionStart && typeof window.__adamGDragBboxSnapDelta === 'function') {
+        const ids = multiDragState.blocks.map(b => b.id);
+        const snapResult = window.__adamGDragBboxSnapDelta({
+          workspace: workspace,
+          selectionRectStart: multiDragState.bboxUnionStart,
+          deltaWs: { x: deltaX, y: deltaY },
+          movingRootIds: ids,
+          axisMode: axisSnap,
+          ctrlEnable: moveEvent.ctrlKey
+        });
+        if (snapResult) {
+          deltaX += snapResult.dx || 0;
+          deltaY += snapResult.dy || 0;
+          if (moveEvent.ctrlKey) updateBboxSnapGuideMulti(workspace, snapResult);
+          else removeBboxSnapGuideMulti();
+        } else {
+          removeBboxSnapGuideMulti();
+        }
+      } else {
+        removeBboxSnapGuideMulti();
+      }
       
       // Move all blocks by the same delta (events disabled during drag)
       multiDragState.blocks.forEach((block, i) => {
@@ -370,6 +708,7 @@ function code(block) {
           block.moveBy(newX - cur.x, newY - cur.y);
         }
       });
+      updateAxisGuideMulti();
     };
     
     // Store events enabled state for restoration
@@ -409,7 +748,14 @@ function code(block) {
     // Clear state before restore to prevent interference
     multiDragState.blocks = [];
     multiDragState.startPositions = [];
+    multiDragState.bboxUnionStart = null;
     multiDragState.startMousePos = null;
+    multiDragState.axisLocked = false;
+    removeBboxSnapGuideMulti();
+    multiDragState.dragStartClient = null;
+    multiDragState.lastClient = null;
+    multiDragState.axisOriginClient = null;
+    removeAxisGuideMulti();
     
     // Re-enable events if they were enabled before drag
     if (multiDragState.eventsWereEnabled) {
@@ -477,6 +823,8 @@ function code(block) {
   // Use capture phase and check early to intercept multi-selection drags
   document.addEventListener('keydown', e => {
     if (e.key && e.key.toLowerCase() === 'g' && !multiDragState.dragging) {
+      if (window.__scaleSelectionScaling) return;
+      if (window.__rotateSelectionRotating) return;
       if (isTypingTargetLayout(e.target)) return;
       
       const multi = window.__multiSelectedBlocks || [];
@@ -521,21 +869,8 @@ function code(block) {
     downHandler: null
   };
 
-  const screenToWorkspaceCoordsLayout = (workspace, clientX, clientY) => {
-    const svg = workspace.getParentSvg();
-    if (!svg) return { x: clientX, y: clientY };
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: clientX, y: clientY };
-    const pt = svg.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    const svgPt = pt.matrixTransform(ctm.inverse());
-    const origin = workspace.getOriginOffsetInPixels();
-    return {
-      x: (svgPt.x - origin.x) / workspace.scale,
-      y: (svgPt.y - origin.y) / workspace.scale
-    };
-  };
+  const screenToWorkspaceCoordsLayout = (workspace, clientX, clientY) =>
+    clientToWorkspaceMulti(workspace, clientX, clientY);
 
   const getAlignDeltasForEdge = (edge, rects) => {
     let target;
@@ -909,6 +1244,125 @@ function code(block) {
       t.isContentEditable ||
       t.contentEditable === 'true');
 
+  /** C: when 2+ blocks are multi-selected, collapse all or expand all (if every collapsible one is collapsed). Single-block C stays with Keyboard Shortcuts. */
+  const bulkCollapseExpandMultiSelection = () => {
+    const ws = typeof Blockly !== 'undefined' && Blockly.getMainWorkspace && Blockly.getMainWorkspace();
+    if (!ws || ws.options.readOnly) return false;
+    const multi = (window.__multiSelectedBlocks || []).filter((b) => b && !b.disposed && b.workspace);
+    if (multi.length < 2) return false;
+    const collapsible = multi.filter(
+      (b) => typeof b.isCollapsed === 'function' && typeof b.setCollapsed === 'function'
+    );
+    if (collapsible.length === 0) return false;
+    const allCollapsed = collapsible.every((b) => b.isCollapsed());
+    const wasGrouped = Blockly.Events.getGroup();
+    Blockly.Events.setGroup(true);
+    try {
+      collapsible.forEach((b) => {
+        try {
+          b.setCollapsed(!allCollapsed);
+        } catch (err) {
+          /* skip */
+        }
+      });
+    } finally {
+      Blockly.Events.setGroup(wasGrouped);
+    }
+    return true;
+  };
+
+  window.__multiSelectBulkCollapseExpand = bulkCollapseExpandMultiSelection;
+
+  const onAxisKeyMulti = (e) => {
+    if (!multiDragState.dragging) return;
+    const k = e.key && e.key.toLowerCase();
+    const axisKey = k === 'z' ? 'y' : k;
+    if (axisKey !== 'x' && axisKey !== 'y') return;
+    if (e.repeat) return;
+    if (isTypingTargetLayout(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    if (axisKey === 'x') {
+      if (multiDragState.axisLocked && multiDragState.axisMode === 'h') multiDragState.axisLocked = false;
+      else if (multiDragState.axisLocked && multiDragState.axisMode === 'v') {
+        multiDragState.axisMode = 'h';
+        if (multiDragState.axisOriginClient) {
+          multiDragState.axisLockLine = {
+            x: multiDragState.axisOriginClient.x,
+            y: multiDragState.axisOriginClient.y
+          };
+        }
+        multiDragState.axisLocked = true;
+      } else {
+        multiDragState.axisMode = 'h';
+        if (multiDragState.axisOriginClient) {
+          multiDragState.axisLockLine = {
+            x: multiDragState.axisOriginClient.x,
+            y: multiDragState.axisOriginClient.y
+          };
+        }
+        multiDragState.axisLocked = true;
+      }
+    } else {
+      if (multiDragState.axisLocked && multiDragState.axisMode === 'v') multiDragState.axisLocked = false;
+      else if (multiDragState.axisLocked && multiDragState.axisMode === 'h') {
+        multiDragState.axisMode = 'v';
+        if (multiDragState.axisOriginClient) {
+          multiDragState.axisLockLine = {
+            x: multiDragState.axisOriginClient.x,
+            y: multiDragState.axisOriginClient.y
+          };
+        }
+        multiDragState.axisLocked = true;
+      } else {
+        multiDragState.axisMode = 'v';
+        if (multiDragState.axisOriginClient) {
+          multiDragState.axisLockLine = {
+            x: multiDragState.axisOriginClient.x,
+            y: multiDragState.axisOriginClient.y
+          };
+        }
+        multiDragState.axisLocked = true;
+      }
+    }
+    updateAxisGuideMulti();
+  };
+
+  const onMmbDownMulti = (e) => {
+    if (!multiDragState.dragging) return;
+    const btn = e.button !== undefined ? e.button : (e.which !== undefined ? e.which - 1 : -1);
+    if (btn !== 1) return;
+    const now = Date.now();
+    if (now - multiDragState.lastMmbDownTs < 80) return;
+    multiDragState.lastMmbDownTs = now;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    if (multiDragState.axisLocked) {
+      multiDragState.axisLocked = false;
+    } else {
+      let sdx = multiDragState.lastSegment.dx, sdy = multiDragState.lastSegment.dy;
+      if (sdx === 0 && sdy === 0 && multiDragState.dragStartClient) {
+        sdx = lastMousePos.x - multiDragState.dragStartClient.x;
+        sdy = lastMousePos.y - multiDragState.dragStartClient.y;
+      }
+      multiDragState.axisMode = Math.abs(sdx) > Math.abs(sdy) ? 'h' : 'v';
+      if (multiDragState.axisOriginClient) {
+        multiDragState.axisLockLine = {
+          x: multiDragState.axisOriginClient.x,
+          y: multiDragState.axisOriginClient.y
+        };
+      }
+      multiDragState.axisLocked = true;
+    }
+    updateAxisGuideMulti();
+  };
+
+  document.addEventListener('keydown', onAxisKeyMulti, true);
+  document.addEventListener('pointerdown', onMmbDownMulti, true);
+  if (!window.PointerEvent) document.addEventListener('mousedown', onMmbDownMulti, true);
+
   const getMovableSelection = () => {
     const multi = window.__multiSelectedBlocks || [];
     return multi.filter(
@@ -939,6 +1393,10 @@ function code(block) {
     const movable = getMovableSelection();
     return filterTopLevelBlocks(filterBlocksNotUnderSelectedAncestor(movable));
   };
+
+  window.__multiSelectGetBlocksSafeForWorkspaceMove = getBlocksSafeForWorkspaceMove;
+  window.__multiSelectIsMultiDragging = () => multiDragState.dragging;
+  window.__multiSelectIsLayoutModeActive = () => layoutMode !== null;
 
   /**
    * One duplicate root per statement/value stack segment in the selection: the block whose
@@ -1067,6 +1525,13 @@ function code(block) {
         } catch (err) {
           /* ignore */
         }
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            if (typeof window.__multiSelectStartGDragAfterDuplicate === 'function') {
+              window.__multiSelectStartGDragAfterDuplicate();
+            }
+          });
+        });
         return true;
       }
 
@@ -1102,6 +1567,13 @@ function code(block) {
         /* ignore */
       }
 
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (typeof window.__multiSelectStartGDragAfterDuplicate === 'function') {
+            window.__multiSelectStartGDragAfterDuplicate();
+          }
+        });
+      });
       return true;
     } finally {
       Blockly.Events.setGroup(wasGrouped);
@@ -1424,22 +1896,8 @@ function code(block) {
     boxSelectState.rectElement.style.display = width > 0 && height > 0 ? 'block' : 'none';
   };
 
-  const screenToWorkspaceCoords = (workspace, clientX, clientY) => {
-    const svg = workspace.getParentSvg();
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: clientX, y: clientY };
-
-    const pt = svg.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    const svgPt = pt.matrixTransform(ctm.inverse());
-    const origin = workspace.getOriginOffsetInPixels();
-
-    return {
-      x: (svgPt.x - origin.x) / workspace.scale,
-      y: (svgPt.y - origin.y) / workspace.scale
-    };
-  };
+  const screenToWorkspaceCoords = (workspace, clientX, clientY) =>
+    clientToWorkspaceMulti(workspace, clientX, clientY);
 
   // Replace vs add: Shift at mouseup (e.shiftKey) — independent of Shift held to start Shift+empty-drag
   const applyMarqueeSelection = (e, workspace, start, current) => {
@@ -1753,6 +2211,411 @@ function code(block) {
       }
     }
   }, true);
+
+  // ============================================
+  // STEP 8: Circle selection (Blender-style) — C toggles mode; wheel radius; LMB add, MMB subtract; Esc / RMB / C exit
+  // ============================================
+  const CIRCLE_RADIUS_MIN_PX = 8;
+  const CIRCLE_RADIUS_MAX_PX = 400;
+
+  let circleSelectState = {
+    active: false,
+    radiusPx: 80,
+    workspace: null,
+    overlay: null,
+    circleEl: null,
+    lastClientX: 0,
+    lastClientY: 0,
+    lmbDown: false,
+    mmbDown: false,
+    capturePointerId: null,
+    onMove: null,
+    onWheel: null,
+    onPointerDown: null,
+    onPointerUp: null,
+    onKeyDown: null
+  };
+
+  window.__multiSelectCircleSelectActive = function () {
+    return !!circleSelectState.active;
+  };
+
+  /** After duplicate (Shift+D or shortcuts): enter G-drag so the copy can be moved immediately. */
+  window.__multiSelectStartGDragAfterDuplicate = function () {
+    if (multiDragState.dragging) return;
+    if (window.__grabBlockDragging) return;
+    if (window.__scaleSelectionScaling) return;
+    if (window.__rotateSelectionRotating) return;
+    if (typeof window.__multiSelectCircleSelectActive === 'function' && window.__multiSelectCircleSelectActive()) return;
+    if (boxSelectState.active) return;
+    if (typeof window.__multiSelectIsLayoutModeActive === 'function' && window.__multiSelectIsLayoutModeActive()) return;
+    const multi = window.__multiSelectedBlocks || [];
+    if (multi.length > 1) {
+      startMultiDrag({ clientX: lastMousePos.x, clientY: lastMousePos.y });
+      return;
+    }
+    if (typeof window.__grabBlockStartGDragAfterDuplicate === 'function') {
+      window.__grabBlockStartGDragAfterDuplicate();
+    }
+  };
+
+  const circleRectIntersectWs = function (cx, cy, r, rect) {
+    var nx = Math.max(rect.left, Math.min(cx, rect.right));
+    var ny = Math.max(rect.top, Math.min(cy, rect.bottom));
+    var dx = cx - nx;
+    var dy = cy - ny;
+    return dx * dx + dy * dy <= r * r;
+  };
+
+  const getBlocksInCircleWs = function (workspace, cxWs, cyWs, radiusWs) {
+    var hits = [];
+    var all = workspace.getAllBlocks(false);
+    for (var i = 0; i < all.length; i++) {
+      var block = all[i];
+      if (!block || block.isShadow() || block.isInsertionMarker()) continue;
+      if (block.isInFlyout) continue;
+      try {
+        var br = block.getBoundingRectangle();
+        if (br && circleRectIntersectWs(cxWs, cyWs, radiusWs, br)) hits.push(block);
+      } catch (err) { /* skip */ }
+    }
+    return hits;
+  };
+
+  /** Always additive: never clears prior multi-selection (MMB is the only subtract). */
+  const applyCircleSelectAdd = function (hits) {
+    if (!hits || hits.length === 0) return;
+    var added = 0;
+    hits.forEach(function (block) {
+      if (window.__multiSelectedBlocks.indexOf(block) === -1) {
+        window.__multiSelectedBlocks.push(block);
+        block.addSelect();
+        added++;
+      }
+    });
+    if (hits.length > 0) {
+      Blockly.common.setSelected(hits[hits.length - 1]);
+    }
+    if (added > 0) {
+      console.log('[Multi-Select] Circle added ' + added + ' block(s)');
+    }
+  };
+
+  const applyCircleSelectSubtract = function (hits) {
+    if (!hits || hits.length === 0) return;
+    var hitSet = {};
+    for (var h = 0; h < hits.length; h++) hitSet[hits[h].id] = hits[h];
+    var beforeLen = window.__multiSelectedBlocks.length;
+    var next = [];
+    window.__multiSelectedBlocks.forEach(function (block) {
+      if (hitSet[block.id]) {
+        if (block.removeSelect) block.removeSelect();
+      } else {
+        next.push(block);
+      }
+    });
+    window.__multiSelectedBlocks = next;
+    if (next.length > 0) {
+      Blockly.common.setSelected(next[next.length - 1]);
+    } else {
+      Blockly.common.setSelected(null);
+    }
+    var removed = beforeLen - next.length;
+    if (removed > 0) {
+      console.log('[Multi-Select] Circle removed ' + removed + ' block(s) from selection');
+    }
+  };
+
+  const runCircleAddAtCurrent = function () {
+    var ws = circleSelectState.workspace;
+    if (!ws) return;
+    var cws = clientToWorkspaceMulti(ws, circleSelectState.lastClientX, circleSelectState.lastClientY);
+    var rWs = circleSelectState.radiusPx / (ws.scale || 1);
+    applyCircleSelectAdd(getBlocksInCircleWs(ws, cws.x, cws.y, rWs));
+  };
+
+  const runCircleSubtractAtCurrent = function () {
+    var ws = circleSelectState.workspace;
+    if (!ws) return;
+    var cws = clientToWorkspaceMulti(ws, circleSelectState.lastClientX, circleSelectState.lastClientY);
+    var rWs = circleSelectState.radiusPx / (ws.scale || 1);
+    applyCircleSelectSubtract(getBlocksInCircleWs(ws, cws.x, cws.y, rWs));
+  };
+
+  const updateCircleSelectGraphic = function () {
+    if (!circleSelectState.circleEl) return;
+    var c = circleSelectState.circleEl;
+    c.setAttribute('cx', circleSelectState.lastClientX);
+    c.setAttribute('cy', circleSelectState.lastClientY);
+    c.setAttribute('r', circleSelectState.radiusPx);
+  };
+
+  const exitCircleSelectMode = function () {
+    if (!circleSelectState.active) return;
+    circleSelectState.active = false;
+    circleSelectState.workspace = null;
+    if (circleSelectState.onMove) {
+      document.removeEventListener('mousemove', circleSelectState.onMove, true);
+      document.removeEventListener('pointermove', circleSelectState.onMove, true);
+      circleSelectState.onMove = null;
+    }
+    if (circleSelectState.onWheel) {
+      document.removeEventListener('wheel', circleSelectState.onWheel, true);
+      circleSelectState.onWheel = null;
+    }
+    if (circleSelectState.onPointerDown) {
+      document.removeEventListener('pointerdown', circleSelectState.onPointerDown, true);
+      circleSelectState.onPointerDown = null;
+    }
+    if (circleSelectState.onPointerUp) {
+      document.removeEventListener('pointerup', circleSelectState.onPointerUp, true);
+      document.removeEventListener('mouseup', circleSelectState.onPointerUp, true);
+      circleSelectState.onPointerUp = null;
+    }
+    circleSelectState.lmbDown = false;
+    circleSelectState.mmbDown = false;
+    if (circleSelectState.capturePointerId != null && circleSelectState.overlay && circleSelectState.overlay.releasePointerCapture) {
+      try {
+        circleSelectState.overlay.releasePointerCapture(circleSelectState.capturePointerId);
+      } catch (eCap) { /* ignore */ }
+    }
+    circleSelectState.capturePointerId = null;
+    if (circleSelectState.onKeyDown) {
+      document.removeEventListener('keydown', circleSelectState.onKeyDown, true);
+      circleSelectState.onKeyDown = null;
+    }
+    if (circleSelectState.overlay && circleSelectState.overlay.parentNode) {
+      circleSelectState.overlay.parentNode.removeChild(circleSelectState.overlay);
+    }
+    circleSelectState.overlay = null;
+    circleSelectState.circleEl = null;
+    console.log('[Multi-Select] Circle selection mode off.');
+  };
+
+  const canEnterCircleSelectMode = function () {
+    if (multiDragState.dragging) return false;
+    if (layoutMode !== null) return false;
+    if (boxSelectState.active) return false;
+    if (window.__scaleSelectionScaling) return false;
+    if (window.__rotateSelectionRotating) return false;
+    if (window.__grabBlockDragging) return false;
+    var ws = Blockly.getMainWorkspace && Blockly.getMainWorkspace();
+    if (!ws || ws.options.readOnly) return false;
+    return true;
+  };
+
+  const enterCircleSelectMode = function () {
+    if (circleSelectState.active || !canEnterCircleSelectMode()) return;
+    var workspace = Blockly.getMainWorkspace();
+    if (!workspace) return;
+
+    circleSelectState.active = true;
+    circleSelectState.workspace = workspace;
+    circleSelectState.radiusPx = 80;
+    circleSelectState.lastClientX = lastMousePos.x;
+    circleSelectState.lastClientY = lastMousePos.y;
+
+    var overlay = document.createElement('div');
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:2147483646;cursor:crosshair;pointer-events:auto;' +
+      '-webkit-user-select:none;user-select:none;touch-action:none;';
+    overlay.addEventListener(
+      'dragstart',
+      function (de) {
+        de.preventDefault();
+      },
+      true
+    );
+    overlay.addEventListener(
+      'selectstart',
+      function (se) {
+        se.preventDefault();
+      },
+      true
+    );
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;');
+    var circ = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circ.setAttribute('fill', 'rgba(66, 133, 244, 0.12)');
+    circ.setAttribute('stroke', '#4285f4');
+    circ.setAttribute('stroke-width', '2');
+    svg.appendChild(circ);
+    overlay.appendChild(svg);
+    document.body.appendChild(overlay);
+    circleSelectState.overlay = overlay;
+    circleSelectState.circleEl = circ;
+    updateCircleSelectGraphic();
+
+    circleSelectState.onMove = function (ev) {
+      if (!circleSelectState.active) return;
+      circleSelectState.lastClientX = ev.clientX;
+      circleSelectState.lastClientY = ev.clientY;
+      updateCircleSelectGraphic();
+      if (circleSelectState.lmbDown) {
+        runCircleAddAtCurrent();
+      } else if (circleSelectState.mmbDown) {
+        runCircleSubtractAtCurrent();
+      }
+    };
+
+    circleSelectState.onWheel = function (ev) {
+      if (!circleSelectState.active) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var delta = ev.deltaY > 0 ? -10 : 10;
+      circleSelectState.radiusPx = Math.max(
+        CIRCLE_RADIUS_MIN_PX,
+        Math.min(CIRCLE_RADIUS_MAX_PX, circleSelectState.radiusPx + delta)
+      );
+      updateCircleSelectGraphic();
+    };
+
+    circleSelectState.onPointerDown = function (ev) {
+      if (!circleSelectState.active || !circleSelectState.workspace) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.button === 2) {
+        exitCircleSelectMode();
+        return;
+      }
+      if (ev.button === 0) {
+        circleSelectState.lastClientX = ev.clientX;
+        circleSelectState.lastClientY = ev.clientY;
+        updateCircleSelectGraphic();
+        circleSelectState.lmbDown = true;
+        circleSelectState.mmbDown = false;
+        if (ev.pointerId != null && typeof overlay.setPointerCapture === 'function') {
+          try {
+            overlay.setPointerCapture(ev.pointerId);
+            circleSelectState.capturePointerId = ev.pointerId;
+          } catch (ePc) { /* ignore */ }
+        }
+        runCircleAddAtCurrent();
+      } else if (ev.button === 1) {
+        circleSelectState.lastClientX = ev.clientX;
+        circleSelectState.lastClientY = ev.clientY;
+        updateCircleSelectGraphic();
+        circleSelectState.mmbDown = true;
+        circleSelectState.lmbDown = false;
+        if (ev.pointerId != null && typeof overlay.setPointerCapture === 'function') {
+          try {
+            overlay.setPointerCapture(ev.pointerId);
+            circleSelectState.capturePointerId = ev.pointerId;
+          } catch (ePc2) { /* ignore */ }
+        }
+        runCircleSubtractAtCurrent();
+      }
+    };
+
+    circleSelectState.onPointerUp = function (ev) {
+      if (!circleSelectState.active) return;
+      var b = ev.button !== undefined ? ev.button : (ev.which !== undefined ? ev.which - 1 : -1);
+      if (b === 0) circleSelectState.lmbDown = false;
+      if (b === 1) circleSelectState.mmbDown = false;
+      if (
+        circleSelectState.capturePointerId != null &&
+        ev.pointerId === circleSelectState.capturePointerId &&
+        overlay.releasePointerCapture
+      ) {
+        try {
+          overlay.releasePointerCapture(ev.pointerId);
+        } catch (eRel) { /* ignore */ }
+        circleSelectState.capturePointerId = null;
+      }
+    };
+
+    circleSelectState.onKeyDown = function (ev) {
+      if (!circleSelectState.active) return;
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        exitCircleSelectMode();
+      }
+    };
+
+    document.addEventListener('mousemove', circleSelectState.onMove, true);
+    document.addEventListener('pointermove', circleSelectState.onMove, true);
+    document.addEventListener('wheel', circleSelectState.onWheel, { capture: true, passive: false });
+    document.addEventListener('pointerdown', circleSelectState.onPointerDown, true);
+    document.addEventListener('pointerup', circleSelectState.onPointerUp, true);
+    document.addEventListener('mouseup', circleSelectState.onPointerUp, true);
+    document.addEventListener('keydown', circleSelectState.onKeyDown, true);
+
+    console.log('[Multi-Select] Circle selection on — wheel resize · hold LMB drag to add · hold MMB drag to subtract · Esc / RMB / C off');
+  };
+
+  document.addEventListener(
+    'keydown',
+    function (e) {
+      if (!e.key || e.key.toLowerCase() !== 'c') return;
+      if (e.altKey) return;
+      if (isTypingTargetLayout(e.target)) return;
+
+      if (circleSelectState.active) {
+        e.preventDefault();
+        e.stopPropagation();
+        exitCircleSelectMode();
+        return;
+      }
+      if (!canEnterCircleSelectMode()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      enterCircleSelectMode();
+    },
+    true
+  );
+
+  /** Alt+A: clear multi-select + Blockly primary when anything is selected (not in inputs; ignores Add Menu Shift+A). */
+  function clearAllAdamMultiSelection() {
+    const arr = window.__multiSelectedBlocks || [];
+    for (let i = 0; i < arr.length; i++) {
+      const block = arr[i];
+      try {
+        if (block && typeof block.removeSelect === 'function') block.removeSelect();
+      } catch (e0) { /* */ }
+    }
+    window.__multiSelectedBlocks = [];
+    try {
+      let sel = null;
+      if (typeof Blockly !== 'undefined' && Blockly.common && typeof Blockly.common.getSelected === 'function') {
+        sel = Blockly.common.getSelected();
+      } else if (typeof Blockly !== 'undefined' && Blockly.selected) {
+        sel = Blockly.selected;
+      }
+      if (sel && typeof sel.unselect === 'function') {
+        sel.unselect();
+      } else if (typeof Blockly !== 'undefined' && Blockly.common && typeof Blockly.common.setSelected === 'function') {
+        Blockly.common.setSelected(null);
+      }
+    } catch (e1) { /* */ }
+  }
+
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (!e.altKey) return;
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const k = e.key && e.key.length === 1 ? e.key.toLowerCase() : '';
+      if (k !== 'a') return;
+      if (isTypingTargetLayout(e.target)) return;
+      const multi = window.__multiSelectedBlocks || [];
+      let primary = null;
+      try {
+        if (typeof Blockly !== 'undefined' && Blockly.common && typeof Blockly.common.getSelected === 'function') {
+          primary = Blockly.common.getSelected();
+        } else if (typeof Blockly !== 'undefined' && Blockly.selected) {
+          primary = Blockly.selected;
+        }
+      } catch (eP) { /* */ }
+      const hasMulti = multi.length > 0;
+      const hasPrimary = !!primary;
+      if (!hasMulti && !hasPrimary) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      clearAllAdamMultiSelection();
+    },
+    true
+  );
 })();`;
 }
 </script>

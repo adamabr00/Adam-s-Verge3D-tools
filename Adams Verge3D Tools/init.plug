@@ -8,21 +8,37 @@
             <next>
               <block type="minimap">
                 <next>
-                  <block type="addMenuBlock">
+                  <block type="disableBlocklyBumpGrid">
                     <next>
-                      <block type="grabBlock">
+                      <block type="addMenuBlock">
                         <next>
-                          <block type="mathExpression">
+                          <block type="grabBlock">
                             <next>
-                              <block type="localView">
+                              <block type="mathExpression">
                                 <next>
-                                  <block type="multiSelect">
+                                  <block type="localView">
                                     <next>
-                                      <block type="procedureRetargetLoader">
+                                      <block type="multiSelect">
                                         <next>
-                                          <block type="moveToTabV2">
+                                          <block type="chainStroke">
                                             <next>
-                                              <block type="floatingToolbar"></block>
+                                              <block type="scaleSelection">
+                                                <next>
+                                                  <block type="rotateSelection">
+                                                    <next>
+                                                      <block type="procedureRetargetLoader">
+                                                        <next>
+                                                          <block type="moveToTabV2">
+                                                            <next>
+                                                              <block type="floatingToolbar"></block>
+                                                            </next>
+                                                          </block>
+                                                        </next>
+                                                      </block>
+                                                    </next>
+                                                  </block>
+                                                </next>
+                                              </block>
                                             </next>
                                           </block>
                                         </next>
@@ -49,11 +65,15 @@
     <block type="shortCutsBlock"></block>
     <block type="improvedSearch"></block>
     <block type="minimap"></block>
+    <block type="disableBlocklyBumpGrid"></block>
     <block type="addMenuBlock"></block> 
     <block type="grabBlock"></block>
     <block type="mathExpression"></block>
     <block type="localView"></block>
     <block type="multiSelect"></block>
+    <block type="chainStroke"></block>
+    <block type="scaleSelection"></block>
+    <block type="rotateSelection"></block>
     <block type="procedureRetargetLoader"></block>
     <block type="moveToTabV2"></block>
     <block type="floatingToolbar"></block>
@@ -4589,6 +4609,17 @@
       ],
       "description": "Block of type Adam's Awesome Tools/minimap"
     },
+    "Adam's Awesome Tools/disableBlocklyBumpGrid": {
+      "category": "Adam's Custom Tools",
+      "displayName": "Adam's Awesome Tools/disableBlocklyBumpGrid",
+      "searchTerms": [
+        "Adam's Awesome Tools/disableBlocklyBumpGrid",
+        "snap",
+        "bump",
+        "grid"
+      ],
+      "description": "Disables Blockly neighbour bump and workspace grid snap. Chain after minimap."
+    },
     "Adam's Awesome Tools/addMenuBlock": {
       "category": "Adam's Custom Tools",
       "displayName": "Adam's Awesome Tools/addMenuBlock",
@@ -4620,7 +4651,42 @@
         "box select",
         "marquee"
       ],
-      "description": "Enable multi-selection: Shift+Click toggles blocks in the selection; Shift+drag on empty workspace (or Ctrl+B one-shot) for box selection—hold Shift on mouseup to add boxed blocks to the selection instead of replacing. G moves the group; X deletes selected blocks. Shift+D duplicates multiple top-level stacks when Keyboard Shortcuts block is present. Ctrl+Q / Shift+Q: align preview; Ctrl+E / Shift+E: spacing. Add Menu Shift+Q / Shift+E."
+      "description": "Enable multi-selection: Shift+Click toggles blocks in the selection; Shift+drag on empty workspace (or Ctrl+B one-shot) for box selection—hold Shift on mouseup to add boxed blocks to the selection instead of replacing. G moves the group; X deletes selected blocks. Add Chain stroke (after this block) for Ctrl+drag on empty workspace to chain statement blocks in stroke order. Shift+D duplicates multiple top-level stacks when Keyboard Shortcuts block is present. Ctrl+Q / Shift+Q: align preview; Ctrl+E / Shift+E: spacing. Add Menu Shift+Q / Shift+E."
+    },
+    "Adam's Awesome Tools/chainStroke": {
+      "category": "Adam's Custom Tools",
+      "displayName": "Adam's Awesome Tools/chainStroke",
+      "searchTerms": [
+        "Adam's Awesome Tools/chainStroke",
+        "chain stroke",
+        "ctrl drag chain",
+        "connect blocks"
+      ],
+      "description": "After multiSelect: Ctrl+drag (Cmd on Mac) on empty workspace draws a stroke without panning; top-level statement blocks hit in order are chained via next/previous."
+    },
+    "Adam's Awesome Tools/scaleSelection": {
+      "category": "Adam's Custom Tools",
+      "displayName": "Adam's Awesome Tools/scaleSelection",
+      "searchTerms": [
+        "Adam's Awesome Tools/scaleSelection",
+        "scale",
+        "multi-select scale",
+        "blender scale",
+        "S key"
+      ],
+      "description": "Multi-select only: press S to scale distances between 2+ top-level stacks from the selection bounds center. Hold Shift while dragging for finer mouse sensitivity. X/Y/MMB axis constraint; click to commit, Esc or right-click to cancel. Chain after multiSelect."
+    },
+    "Adam's Awesome Tools/rotateSelection": {
+      "category": "Adam's Custom Tools",
+      "displayName": "Adam's Awesome Tools/rotateSelection",
+      "searchTerms": [
+        "Adam's Awesome Tools/rotateSelection",
+        "rotate",
+        "multi-select rotate",
+        "R key",
+        "pivot rotate"
+      ],
+      "description": "Multi-select only: press R to rotate 2+ top-level stacks rigidly around the same pivot as scale (mean of root bbox centers). Hold Shift while dragging for finer mouse sensitivity. Drag or type degrees; Enter or click to commit, Esc or right-click to cancel. Chain after multiSelect (and after scaleSelection if used)."
     },
     "Adam's Awesome Tools/floatingToolbar": {
       "category": "Adam's Custom Tools",

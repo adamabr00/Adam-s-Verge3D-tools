@@ -1,4 +1,4 @@
-<template color="#455c80" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Optional draggable horizontal icon bar: Add block (Shift+A), Local view (Shift+H), Math (Shift+C), Minimap, Improved search (Shift+F), Move to tab (Shift+T), layout Align / Space. Drag the grip to move; position is remembered per app URL via the browser (localStorage), not inside the .blend / puzzle file. Requires ?logic. Chain after other Adam puzzles in Master.">
+<template color="#455c80" prev="true" next="true" help="https://github.com/adamabr00/Adam-s-Verge3D-tools/tree/main" tooltip="Optional draggable horizontal icon bar: Add block (Shift+A), Local view (Shift+H), Math (Shift+C), Minimap, Improved search (Shift+F), Move to tab (Shift+T), layout Align / Space. Drag the grip to move; position is remembered per app URL via the browser (localStorage), not inside the .blend / puzzle file. Requires ?logic. Chain after other Adam puzzles in Master. Multi-select scale (S) and rotate (R) are available when the scaleSelection and rotateSelection puzzles are loaded.">
     <dummy>
         <label>Floating toolbar</label>
     </dummy>
