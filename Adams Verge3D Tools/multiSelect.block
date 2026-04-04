@@ -1432,6 +1432,29 @@ function code(block) {
   };
 
   /**
+   * Blockly's pasteBlock_ nudges duplicates by snapRadius so they don't sit on the source.
+   * For Shift+D → G-drag we want the copy exactly on the original so axis-locked drags stay in line.
+   */
+  const alignPastedRootToOriginal = (original, pastedRoot) => {
+    if (!original || !pastedRoot || original.disposed || pastedRoot.disposed) return;
+    try {
+      if (typeof original.getRelativeToSurfaceXY !== 'function') return;
+      if (typeof pastedRoot.moveTo !== 'function') return;
+      const o = original.getRelativeToSurfaceXY();
+      if (Blockly.utils && Blockly.utils.Coordinate) {
+        pastedRoot.moveTo(new Blockly.utils.Coordinate(o.x, o.y));
+      } else {
+        const p = pastedRoot.getRelativeToSurfaceXY
+          ? pastedRoot.getRelativeToSurfaceXY()
+          : { x: 0, y: 0 };
+        pastedRoot.moveBy(o.x - p.x, o.y - p.y);
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  };
+
+  /**
    * Blockly.clipboard.duplicate uses BlockSvg.toCopyData() with addNextBlocks: false, so stacks
    * connected via next (e.g. Verge3D comment chains) paste as a single block. Serialize with
    * next + input children and paste — same as full stack copy.
@@ -1466,7 +1489,26 @@ function code(block) {
     if (!pasted && Blockly.clipboard && typeof Blockly.clipboard.duplicate === 'function') {
       pasted = Blockly.clipboard.duplicate(block);
     }
+    if (pasted) alignPastedRootToOriginal(block, pasted);
     return pasted;
+  };
+
+  /**
+   * Single-block Shift+D: same duplicate path as multi-select (full tree + align for G-drag).
+   * Used by shortCutsBlock when multiSelect is loaded.
+   */
+  window.__multiSelectDuplicateSingleAligned = function () {
+    const workspace = Blockly.getMainWorkspace();
+    if (!workspace || workspace.options.readOnly) return false;
+    const block = Blockly.common.getSelected
+      ? Blockly.common.getSelected()
+      : Blockly.selected;
+    if (!block || block.disposed) return false;
+    if (block.isInFlyout) return false;
+    if (typeof block.isDeletable === 'function' && !block.isDeletable()) return false;
+    if (typeof block.isMovable === 'function' && !block.isMovable()) return false;
+    if (typeof block.isDuplicatable === 'function' && !block.isDuplicatable()) return false;
+    return !!duplicateBlockFullTree(block);
   };
 
   /** Shift+D via shortCutsBlock: multi-duplicate using stack roots (incl. one chain of 3+ blocks). */

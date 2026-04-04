@@ -34,6 +34,17 @@ function code(block) {
       if (typeof window.__multiSelectDuplicateRoots === 'function' && window.__multiSelectDuplicateRoots()) {
         return true;
       }
+      if (typeof window.__multiSelectDuplicateSingleAligned === 'function' &&
+          window.__multiSelectDuplicateSingleAligned()) {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            if (typeof window.__multiSelectStartGDragAfterDuplicate === 'function') {
+              window.__multiSelectStartGDragAfterDuplicate();
+            }
+          });
+        });
+        return true;
+      }
       const block = Blockly.selected;
       if (block) {
         duplicateEntry.callback({ block: block, workspace: Blockly.getMainWorkspace() });
