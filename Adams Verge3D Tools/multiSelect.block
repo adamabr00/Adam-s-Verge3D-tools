@@ -1494,8 +1494,8 @@ function code(block) {
   };
 
   /**
-   * Single-block Shift+D: same duplicate path as multi-select (full tree + align for G-drag).
-   * Used by shortCutsBlock when multiSelect is loaded.
+   * Duplicate ONLY the selected block (no next tail), but align it back onto the
+   * original so Shift+D → G-drag starts perfectly in-line.
    */
   window.__multiSelectDuplicateSingleAligned = function () {
     const workspace = Blockly.getMainWorkspace();
@@ -1508,7 +1508,35 @@ function code(block) {
     if (typeof block.isDeletable === 'function' && !block.isDeletable()) return false;
     if (typeof block.isMovable === 'function' && !block.isMovable()) return false;
     if (typeof block.isDuplicatable === 'function' && !block.isDuplicatable()) return false;
-    return !!duplicateBlockFullTree(block);
+    let pasted = null;
+    try {
+      if (Blockly.clipboard && typeof Blockly.clipboard.duplicate === 'function') {
+        // Stock Blockly behavior: duplicates only the selected block (no next chain).
+        pasted = Blockly.clipboard.duplicate(block);
+      }
+    } catch (e0) { /* ignore */ }
+
+    try {
+      const ws = block.workspace;
+      if (!pasted && ws && typeof ws.paste === 'function') {
+        const save =
+          Blockly.serialization &&
+          Blockly.serialization.blocks &&
+          Blockly.serialization.blocks.save;
+        if (typeof save === 'function') {
+          const saveInfo = save(block, {
+            addCoordinates: true,
+            addNextBlocks: false,
+            addInputBlocks: true,
+            doFullSerialization: true,
+          });
+          if (saveInfo) pasted = ws.paste(saveInfo);
+        }
+      }
+    } catch (e1) { /* ignore */ }
+
+    if (pasted) alignPastedRootToOriginal(block, pasted);
+    return !!pasted;
   };
 
   /** Shift+D via shortCutsBlock: multi-duplicate using stack roots (incl. one chain of 3+ blocks). */
@@ -2589,6 +2617,7 @@ function code(block) {
     'keydown',
     function (e) {
       if (!e.key || e.key.toLowerCase() !== 'c') return;
+      if (e.ctrlKey || e.metaKey) return;
       if (e.altKey) return;
       if (isTypingTargetLayout(e.target)) return;
 

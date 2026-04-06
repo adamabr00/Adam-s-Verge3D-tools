@@ -489,7 +489,38 @@ function code(block) {
             renderTabsBar();
         }
 
-        // 🔹 Enhanced highlighting with custom visual effects
+        // 🔹 One-time SVG filter for soft glow (same document as workspace canvas)
+        function ensureAdamSearchHighlightGlowFilter(parentSvg) {
+            const NS = 'http://www.w3.org/2000/svg';
+            if (!parentSvg || parentSvg.querySelector('#__adamSearchGlowFilter__')) return;
+            try {
+                const defs = document.createElementNS(NS, 'defs');
+                defs.setAttribute('id', '__adamSearchHighlightDefs__');
+                const filter = document.createElementNS(NS, 'filter');
+                filter.setAttribute('id', '__adamSearchGlowFilter__');
+                filter.setAttribute('x', '-80%');
+                filter.setAttribute('y', '-80%');
+                filter.setAttribute('width', '260%');
+                filter.setAttribute('height', '260%');
+                const blur = document.createElementNS(NS, 'feGaussianBlur');
+                blur.setAttribute('in', 'SourceGraphic');
+                blur.setAttribute('stdDeviation', '2.8');
+                blur.setAttribute('result', 'blur');
+                const merge = document.createElementNS(NS, 'feMerge');
+                const mn1 = document.createElementNS(NS, 'feMergeNode');
+                mn1.setAttribute('in', 'blur');
+                const mn2 = document.createElementNS(NS, 'feMergeNode');
+                mn2.setAttribute('in', 'SourceGraphic');
+                merge.appendChild(mn1);
+                merge.appendChild(mn2);
+                filter.appendChild(blur);
+                filter.appendChild(merge);
+                defs.appendChild(filter);
+                parentSvg.insertBefore(defs, parentSvg.firstChild);
+            } catch (e) { /* ignore */ }
+        }
+
+        // 🔹 Enhanced highlighting: pulsing glow + marching-ants dash motion
         function addCustomHighlight(block) {
             removeCustomHighlight();
             
@@ -500,6 +531,9 @@ function code(block) {
             
             const workspace = Blockly.getMainWorkspace();
             if (!workspace) return;
+
+            const parentSvg = typeof workspace.getParentSvg === 'function' ? workspace.getParentSvg() : null;
+            if (parentSvg) ensureAdamSearchHighlightGlowFilter(parentSvg);
             
             // Get block position and size
             // Use block's own height/width properties (not getHeightWidth which includes children)
@@ -525,28 +559,68 @@ function code(block) {
                 height = block.height || 40;
             }
             
+            const sw = Math.max(3, 4 / scale);
+            const pad = 6;
+            
             // Create a group element that will be positioned relative to the block
             const highlightGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             highlightGroup.setAttribute('id', '__searchHighlightGroup__');
             highlightGroup.setAttribute('transform', \`translate(\${pos.x}, \${pos.y})\`);
-            
-            // Create overlay rectangle (positioned relative to group)
-            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-            rect.setAttribute('x', '-6');
-            rect.setAttribute('y', '-6');
-            rect.setAttribute('width', String(width + 12));
-            rect.setAttribute('height', String(height + 12));
+            highlightGroup.setAttribute('pointer-events', 'none');
+
+            const NS = 'http://www.w3.org/2000/svg';
+            const x = -pad;
+            const y = -pad;
+            const w = width + pad * 2;
+            const h = height + pad * 2;
+
+            const glowRect = document.createElementNS(NS, 'rect');
+            glowRect.setAttribute('x', String(x));
+            glowRect.setAttribute('y', String(y));
+            glowRect.setAttribute('width', String(w));
+            glowRect.setAttribute('height', String(h));
+            glowRect.setAttribute('rx', '8');
+            glowRect.setAttribute('ry', '8');
+            glowRect.setAttribute('fill', 'none');
+            glowRect.setAttribute('stroke', '#7dd3fc');
+            glowRect.setAttribute('stroke-width', String(sw * 2.2));
+            glowRect.setAttribute('stroke-linejoin', 'round');
+            glowRect.setAttribute('opacity', '0.55');
+            if (parentSvg && parentSvg.querySelector('#__adamSearchGlowFilter__')) {
+                glowRect.setAttribute('filter', 'url(#__adamSearchGlowFilter__)');
+            }
+            glowRect.style.vectorEffect = 'non-scaling-stroke';
+
+            const rect = document.createElementNS(NS, 'rect');
+            rect.setAttribute('x', String(x));
+            rect.setAttribute('y', String(y));
+            rect.setAttribute('width', String(w));
+            rect.setAttribute('height', String(h));
             rect.setAttribute('rx', '6');
             rect.setAttribute('ry', '6');
             rect.setAttribute('fill', 'none');
             rect.setAttribute('stroke', '#5b8cff');
-            rect.setAttribute('stroke-width', String(Math.max(3, 4 / scale)));
-            rect.setAttribute('stroke-dasharray', '10,5');
+            rect.setAttribute('stroke-width', String(sw));
+            rect.setAttribute('stroke-dasharray', '10 6');
+            rect.setAttribute('stroke-dashoffset', '0');
+            rect.setAttribute('stroke-linejoin', 'round');
             rect.setAttribute('opacity', '1');
-            rect.setAttribute('pointer-events', 'none');
             rect.style.vectorEffect = 'non-scaling-stroke';
-            
+
+            highlightGroup.appendChild(glowRect);
             highlightGroup.appendChild(rect);
+
+            const t0 = performance.now();
+            const dashPeriod = 16;
+            function tick(now) {
+                if (!highlightOverlay || highlightOverlay !== highlightGroup) return;
+                const t = (now - t0) / 1000;
+                rect.setAttribute('stroke-dashoffset', String(-((t * 38) % dashPeriod)));
+                const pulse = 0.38 + 0.32 * (0.5 + 0.5 * Math.sin(t * 4.2));
+                glowRect.setAttribute('opacity', String(pulse));
+                highlightGroup._searchAnimRaf = requestAnimationFrame(tick);
+            }
+            highlightGroup._searchAnimRaf = requestAnimationFrame(tick);
             
             // Get block canvas and add highlight group
             const blockCanvas = workspace.getCanvas && workspace.getCanvas();
@@ -557,8 +631,14 @@ function code(block) {
         }
         
         function removeCustomHighlight() {
-            if (highlightOverlay && highlightOverlay.parentNode) {
-                highlightOverlay.parentNode.removeChild(highlightOverlay);
+            if (highlightOverlay) {
+                if (highlightOverlay._searchAnimRaf != null) {
+                    cancelAnimationFrame(highlightOverlay._searchAnimRaf);
+                    highlightOverlay._searchAnimRaf = null;
+                }
+                if (highlightOverlay.parentNode) {
+                    highlightOverlay.parentNode.removeChild(highlightOverlay);
+                }
                 highlightOverlay = null;
             }
         }
@@ -852,8 +932,37 @@ function code(block) {
             }
         }
 
+        function getVariableDisplayNameForSearch(block) {
+            if (!block || !block.workspace) return "";
+            const t = (block.type || "").toLowerCase();
+            const looksLikeVarBlock =
+                t === "variables_get" ||
+                t === "variables_set" ||
+                t === "variables_get_dynamic" ||
+                t === "variables_set_dynamic" ||
+                t.indexOf("variables_") === 0;
+            try {
+                const vf = typeof block.getField === "function" ? block.getField("VAR") : null;
+                if (!vf && !looksLikeVarBlock) return "";
+                if (vf && typeof vf.getText === "function") {
+                    const s = vf.getText();
+                    if (s != null && String(s).trim() !== "") return String(s).trim();
+                }
+                const vid =
+                    typeof block.getFieldValue === "function" ? block.getFieldValue("VAR") : "";
+                if (vid && typeof block.workspace.getVariableById === "function") {
+                    const model = block.workspace.getVariableById(vid);
+                    if (model && model.name) return String(model.name).trim();
+                }
+            } catch (e) { /* ignore */ }
+            return "";
+        }
+
         function getCleanBlockQuery(block) {
-            return block?.type?.toLowerCase() || "";
+            if (!block) return "";
+            const varName = getVariableDisplayNameForSearch(block);
+            if (varName) return varName;
+            return block.type ? String(block.type).toLowerCase() : "";
         }
 
         // 🔹 Hotkeys
