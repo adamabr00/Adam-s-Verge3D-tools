@@ -958,10 +958,43 @@ function code(block) {
             return "";
         }
 
+        function getProcedureDisplayNameForSearch(block) {
+            if (!block || !block.workspace) return "";
+            const t = (block.type || "").toLowerCase();
+            const looksLikeProc =
+                t === "procedures_defnoreturn" ||
+                t === "procedures_defreturn" ||
+                t === "procedures_callnoreturn" ||
+                t === "procedures_callreturn" ||
+                t.indexOf("procedures_") === 0;
+            try {
+                if (!looksLikeProc && !(block.getProcedureDef || block.getProcedureCall)) return "";
+                if (typeof block.getProcedureDef === "function") {
+                    const def = block.getProcedureDef();
+                    const nm = def && def[0] != null ? String(def[0]).trim() : "";
+                    if (nm) return nm;
+                }
+                if (typeof block.getProcedureCall === "function") {
+                    const nm2 = block.getProcedureCall();
+                    if (nm2 != null && String(nm2).trim() !== "") return String(nm2).trim();
+                }
+                const nf = typeof block.getField === "function" ? block.getField("NAME") : null;
+                if (nf && typeof nf.getText === "function") {
+                    const s = nf.getText();
+                    if (s != null && String(s).trim() !== "") return String(s).trim();
+                }
+                const nv = typeof block.getFieldValue === "function" ? block.getFieldValue("NAME") : "";
+                if (nv != null && String(nv).trim() !== "") return String(nv).trim();
+            } catch (e) { /* ignore */ }
+            return "";
+        }
+
         function getCleanBlockQuery(block) {
             if (!block) return "";
             const varName = getVariableDisplayNameForSearch(block);
             if (varName) return varName;
+            const procName = getProcedureDisplayNameForSearch(block);
+            if (procName) return procName;
             return block.type ? String(block.type).toLowerCase() : "";
         }
 
